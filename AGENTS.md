@@ -5,7 +5,7 @@ Dokumen ini adalah aturan bersama untuk kedua agent (Pane 1: Mandor & Pane 2: Tu
 ---
 
 ## 1. ORCA DUAL-ENGINE MULTI-AGENT ARCHITECTURE
-- **Pane 1**: Mandor (Claude Opus 5.5 / Sonnet / GPT-4o) — Arsitek, Quick-Fixer (≤ 15 baris), Review Gate (Strict Max 1 Pass).
+- **Pane 1**: Mandor (Claude Opus 5.5 / Sonnet / GPT-4o) — Arsitek, Quick-Fixer (≤ 15 baris), Review Gate (Strict Max 1 Pass Gate).
 - **Pane 2**: Tukang Kerja (Gemini 3.8 Flash High / 2.5 Flash / Haiku) — Heavy Hands-on Executor, Multi-file edits, Test Runner.
 - **Komunikasi Antar Pane**:
   - `orca-bridge delegate <title> <instruksi>` (Mandor -> Tukang)
@@ -14,14 +14,23 @@ Dokumen ini adalah aturan bersama untuk kedua agent (Pane 1: Mandor & Pane 2: Tu
 
 ---
 
-## 2. STRICT ANTI-RONDE-LOOP POLICY (TOKEN PROTECTION)
+## 2. ANTI-HANDOFF-LEAK CONTRACT (MUTLAK)
+Kebocoran token terbesar pada sistem multi-agent terjadi saat handoff tugas. Untuk mencegah Tukang mengeksplorasi ulang repo yang barusan dihemat:
+1. **Mandor Wajib File Allowlist**: Delegasi WAJIB menyertakan `Allowed Files: [...]`.
+2. **Mandor Wajib Single Verify Command**: Delegasi WAJIB menyertakan `Verify Command: <command>`.
+3. **Tukang Dilarang Eksplor Liar**: Tukang **HARAM** membaca, grep, atau mengedit file di luar allowlist yang diberikan Mandor.
+4. **Verifikasi Akhir Milik Mandor (No Self-Approve)**: Tukang dilarang menilai kelayakan kerjaannya sendiri. Tukang hanya menyetor bukti konkret (pass test count & git diff); Mandor yang memvalidasi dan meng-approve.
+
+---
+
+## 3. STRICT ANTI-RONDE-LOOP POLICY (TOKEN PROTECTION)
 - Jika Tukang lapor `DONE` dan test hijau (pass semua): **WAJIB LANGSUNG APPROVE & SELESAI**.
 - Dilarang membuka ronde 2, ronde 3, atau fix2 untuk sekadar nitpick kosmetik sepele.
 - Menulis instruksi delegasi panjang untuk task kecil jauh lebih boros token daripada langsung mengeditnya sendiri.
 
 ---
 
-## 3. ZERO-GREP POLICY & SEMANTIC CODE NAVIGATION
+## 4. ZERO-GREP POLICY & SEMANTIC CODE NAVIGATION
 - DILARANG melakukan pencarian (grep/find) 1-per-1 secara acak/manual yang memboroskan ribuan token context.
 - Gunakan alat bantu semantik & definisi:
   1. `semantex --refs "<konsep>"`: Pencarian semantik hemat token (-84%).
@@ -33,15 +42,15 @@ Dokumen ini adalah aturan bersama untuk kedua agent (Pane 1: Mandor & Pane 2: Tu
 
 ---
 
-## 4. 4 KARPATHY PRINCIPLES (MANDATORY)
+## 5. 4 KARPATHY PRINCIPLES (MANDATORY)
 1. **Think Before Coding & Push Back**: Pahami alur, jangan berasumsi. Tolak cara yang over-engineered.
 2. **Simplicity First**: Tulis solusi paling minimal (YAGNI ekstrem).
-3. **Surgical Blast Radius & Clean Own Mess**: Sentuh HANYA baris/file yang perlu; bersihkan dead code buatan sendiri.
+3. **Surgical Blast Radius & Clean Own Mess**: Sentuh HANYA baris/file yang ada di allowlist; bersihkan dead code buatan sendiri.
 4. **Strict Verification**: Dilarang klaim "DONE" sebelum verifikasi nyata (test hijau / build lolos / log konkret).
 
 ---
 
-## 5. 7-POINT OWASP SECURITY GUARDS
+## 6. 7-POINT OWASP SECURITY GUARDS
 1. **Input Validation**: Anggap semua input user tidak aman. Validasi tipe dan batasan sebelum diproses.
 2. **Zero Trust Output**: Jangan pernah ekspos stack trace atau error internal server ke response client.
 3. **Credential Hygiene**: DILARANG KERAS hardcode API key, secret, password, atau token. Wajib gunakan `.env`.
@@ -52,7 +61,7 @@ Dokumen ini adalah aturan bersama untuk kedua agent (Pane 1: Mandor & Pane 2: Tu
 
 ---
 
-## 6. GAYA BAHASA & ANTI-SLOP
+## 7. GAYA BAHASA & ANTI-SLOP
 - **Bahasa Default**: Indonesia gaul Gen-Z alami (`humanizer-indonesia`), istilah teknis tetap Bahasa Inggris.
 - **Caveman Ultra**: Output ke user ringkas, maksimal 3-4 bullet points (< 50 kata), tanpa filler/narasi panjang.
 - **Anti-Slop**: Bebas pola generik AI pada UI layout, visual styling, copy teks, dan code comments.
