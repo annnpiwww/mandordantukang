@@ -11,6 +11,8 @@
 - Deterministic routing: `pair bind|show|clear`, bindings written by `orca-pair`; unique title match or Orca split layout otherwise; ambiguous/missing = error. Self-send refused.
 - Token tracker: `usage add|collect|report|compare`; omp session usage collected automatically as `actual`; estimates always labelled `estimated`.
 - Benchmark harness (`bench/`), test suite (`tests/run.sh`, fake Orca CLI), `VERSION`, `orca-bridge version`.
+- Global activation: `install.sh --global-rules` writes marker-delimited Mandor rules (`rules/mandor.md`) into `~/.omp/agent/RULES.md` and Tukang rules (`rules/tukang.md`) into `~/.gemini/GEMINI.md`, links the skill for agy; idempotent, backed up, removed by `--uninstall`. Unbalanced markers abort instead of truncating.
+- Upgrade from v0.1 installs: skill files identical to any released version are upgraded in place (no manifest needed); edited ones still become `.new`.
 - Installer: dependency checks, staged syntax validation, backups, symlink-safe replace, rollback on failure, user-edited skill files preserved (`.new`), `--force`, `--uninstall`.
 
 ### Changed

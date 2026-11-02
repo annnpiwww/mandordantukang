@@ -1,14 +1,21 @@
 #!/usr/bin/env bash
 # scripts/install.sh — Installer for Mandor dan Tukang (Orca Dual-Engine Architecture)
-# Usage: scripts/install.sh [--force] | --uninstall
-#   --force      overwrite skill files you customized (a backup is kept)
-#   --uninstall  remove installed binaries/lib (restores the newest backup of each binary)
+# Usage: scripts/install.sh [--force] [--global-rules] | --uninstall
+#   --force         overwrite skill files you customized (a backup is kept)
+#   --global-rules  make the flow global: Mandor block in ~/.omp/agent/RULES.md (omp), Tukang block in
+#                   ~/.gemini/GEMINI.md (agy), skill link for agy. Marker-delimited, backed up, re-run safe.
+#   --uninstall     remove installed binaries/lib + global blocks (restores the newest backup of each binary)
 set -Eeuo pipefail
 
 INSTALL_BIN_DIR="${INSTALL_BIN_DIR:-${HOME}/.local/bin}"
 SKILLS_DIR="${SKILLS_DIR:-${HOME}/.agents/skills/mandordantukang}"
 SHARE_DIR="${SHARE_DIR:-${XDG_DATA_HOME:-$HOME/.local/share}/mandordantukang}"
 MARKER="mandordantukang"
+OMP_RULES="${OMP_RULES:-$HOME/.omp/agent/RULES.md}"
+AGY_RULES="${AGY_RULES:-$HOME/.gemini/GEMINI.md}"
+AGY_SKILLS="${AGY_SKILLS:-$HOME/.gemini/config/skills}"
+START="<!-- mandordantukang:start -->"
+END="<!-- mandordantukang:end -->"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd -P)"
 ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd -P)"
@@ -16,18 +23,53 @@ NEW_VERSION="$(cat "$ROOT_DIR/VERSION")"
 TS="$(date +%Y%m%d-%H%M%S)"
 BACKUP_DIR="$SHARE_DIR/backups/$TS"
 
-mode=install force=0
+mode=install force=0 global=0
 for a in "$@"; do
   case "$a" in
     --force) force=1 ;;
+    --global-rules) global=1 ;;
     --uninstall) mode=uninstall ;;
-    -h|--help) sed -n '2,5p' "$0"; exit 0 ;;
+    -h|--help) sed -n '2,7p' "$0"; exit 0 ;;
     *) echo "unknown option: $a" >&2; exit 1 ;;
   esac
 done
 
 say() { echo "🪐 [mandordantukang] $*"; }
 sum_of() { cksum < "$1" | cut -d' ' -f1; }
+
+# set_block <file> <content-file|"">: replace the marker block (append if absent); "" removes it.
+# Writes in place (keeps symlinks/inode); the previous file is backed up first.
+set_block() {
+  local f="$1" src="$2" tmp ns ne
+  [[ -f "$f" || -n "$src" ]] || return 0
+  mkdir -p "$(dirname "$f")"; touch "$f"
+  ns="$(grep -cxF -- "$START" "$f" || true)"; ne="$(grep -cxF -- "$END" "$f" || true)"
+  [[ "$ns" == "$ne" && "$ns" -le 1 ]] || { echo "❌ $f has unbalanced $MARKER markers; fix by hand" >&2; return 1; }
+  tmp="$(mktemp)"
+  awk -v s="$START" -v e="$END" -v src="$src" '
+    function emit(  l) { print s; while ((getline l < src) > 0) print l; close(src); print e }
+    $0 == s { skip = 1; if (src != "") emit(); done = 1; next }
+    $0 == e { skip = 0; next }
+    !skip { print }
+    END { if (!done && src != "") { print ""; emit() } }' "$f" > "$tmp"
+  if ! cmp -s "$tmp" "$f"; then
+    mkdir -p "$BACKUP_DIR/rules"
+    cp "$f" "$BACKUP_DIR/rules/$(printf '%s' "$f" | tr '/' '_')"
+    cat "$tmp" > "$f"
+    say "$([[ -n "$src" ]] && echo updated || echo removed) $MARKER block in $f"
+  fi
+  rm -f "$tmp"
+}
+
+# A skill file identical to any released version of itself is ours to upgrade (covers installs
+# that predate the manifest).
+released_blob() {
+  git -C "$ROOT_DIR" rev-parse -q --git-dir >/dev/null 2>&1 || return 1
+  local h raw
+  h="$(git hash-object --no-filters -- "$2")"
+  raw="$(git -C "$ROOT_DIR" log --all --format= --raw --no-abbrev -- "$1" 2>/dev/null || true)"
+  [[ "$raw" == *"$h"* ]]
+}
 
 # ---------- uninstall ----------
 if [[ "$mode" == uninstall ]]; then
@@ -42,6 +84,9 @@ if [[ "$mode" == uninstall ]]; then
     fi
   done
   rm -f "$SHARE_DIR/mandor-lib.js" "$SHARE_DIR/VERSION" "$SHARE_DIR/manifest.tsv"
+  set_block "$OMP_RULES" ""
+  set_block "$AGY_RULES" ""
+  if [[ -L "$AGY_SKILLS/mandordantukang" ]]; then rm -f "$AGY_SKILLS/mandordantukang"; say "removed agy skill link"; fi
   say "uninstalled. Kept: $SKILLS_DIR (your skill files), $SHARE_DIR/backups, task state in ~/.local/state/mandordantukang"
   exit 0
 fi
@@ -115,7 +160,7 @@ else
     printf '%s\t%s\n' "$rel" "$(sum_of "$src")" >> "$NEW_MANIFEST"
     if [[ -f "$dest" ]] && ! cmp -s "$src" "$dest"; then
       prev="$(awk -F'\t' -v k="$rel" '$1==k {print $2}' "$MANIFEST" 2>/dev/null || true)"
-      if [[ "$force" != 1 && "$prev" != "$(sum_of "$dest")" ]]; then
+      if [[ "$force" != 1 && "$prev" != "$(sum_of "$dest")" ]] && ! released_blob "$rel" "$dest"; then
         mkdir -p "$(dirname "$dest")"; cp "$src" "$dest.new"
         echo "⚠️  kept your edited $dest; new version saved as $dest.new (--force to overwrite)" >&2
         continue
@@ -131,6 +176,14 @@ cp "$ROOT_DIR/VERSION" "$SHARE_DIR/VERSION"
 got="$("$INSTALL_BIN_DIR/orca-bridge" version)"
 [[ "$got" == "orca-bridge $NEW_VERSION" ]] || { echo "❌ validation failed: '$got'" >&2; false; }
 trap - ERR
+
+if [[ "$global" == 1 ]]; then
+  set_block "$OMP_RULES" "$ROOT_DIR/rules/mandor.md"
+  set_block "$AGY_RULES" "$ROOT_DIR/rules/tukang.md"
+  if [[ -d "$AGY_SKILLS" && ! -e "$AGY_SKILLS/mandordantukang" ]]; then
+    ln -s "$SKILLS_DIR" "$AGY_SKILLS/mandordantukang"; say "linked agy skill $AGY_SKILLS/mandordantukang"
+  fi
+fi
 
 say "✅ installed v$NEW_VERSION$([[ -d "$BACKUP_DIR" ]] && echo " (backups: $BACKUP_DIR)" || true)"
 case ":$PATH:" in *":$INSTALL_BIN_DIR:"*) ;; *) echo "⚠️  $INSTALL_BIN_DIR is not on PATH" >&2 ;; esac

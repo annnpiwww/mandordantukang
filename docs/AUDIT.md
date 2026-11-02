@@ -31,7 +31,7 @@ Tidak terbukti bermasalah: perintah `browser` dan `worktree` (dipertahankan apa 
 - `scripts/orca-pair.sh`: AGENTS.md dari kanonik, bind handle, readiness wait, retry Orca, bg indexer senyap. Override `MANDOR_CMD`/`TUKANG_CMD`/`MANDOR_HOME`.
 - `scripts/install.sh`: lifecycle lengkap.
 - `AGENTS.md`, `CLAUDE.md`, `GEMINI.md`, `SKILL.md`, `README.md`: lihat bagian H.
-- Baru: `VERSION`, `CHANGELOG.md`, `tests/`, `bench/`, `docs/AUDIT.md`.
+- Baru: `VERSION`, `CHANGELOG.md`, `tests/`, `bench/`, `docs/AUDIT.md`, `rules/mandor.md` + `rules/tukang.md` (blok global omp/agy via `install.sh --global-rules`).
 
 ## C. Efisiensi token: mekanismenya
 1. **Handoff padat**: satu header + `SPEC` JSON minified + 3 baris aturan. Tidak ada salinan AGENTS.md atau penjelasan berulang. Ukuran tiap handoff dicatat (`handoff_tokens_est`).
@@ -102,3 +102,5 @@ Tidak ada skill atau kemampuan yang dihapus. `skills/*.md` tidak diubah.
 | `SKILL.md` | Paragraf enforcement, langkah 5 tracker | Klaim ">85%" jadi target + rujukan benchmark; review gate pakai `CHECK` | Klaim angka tanpa data |
 | `README.md` | Diagram state, daftar perintah baru, info install/uninstall, struktur baru | Klaim ">85%" | Klaim angka tanpa data |
 | template `orca-pair` | (dipindah ke `AGENTS.md`) | `orca-pair` menyalin `AGENTS.md` kanonik | Heredoc template (isinya dipertahankan di `AGENTS.md`) |
+| `rules/mandor.md` (global omp) | Semua poin section "Orca Dual-Engine Multi-Agent" lama di `~/.omp/agent/RULES.md` + klasifikasi, spec, protokol gate, recovery, token | Approve: dari "`npm test` lolos" jadi `CHECK approvable` + kriteria; delegasi jadi spec JSON (format lama tetap disebut) | Tidak ada |
+| `rules/tukang.md` (global agy) | Peran Tukang, format task, boundary, report/BLOCKED, browser, disiplin | (baru; `~/.gemini/GEMINI.md` sebelumnya tidak punya aturan Orca) | Tidak ada |

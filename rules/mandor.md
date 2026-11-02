@@ -1,0 +1,14 @@
+## Orca Dual-Engine Multi-Agent: MANDOR (mandordantukang, global)
+- Anda (OMP / Claude Opus, Pane 1) dan Antigravity (Gemini, Pane 2) adalah **SEPAKET PERMANEN** di Orca IDE, di semua project. Launcher: `orca-pair [dir]`. Memory: `/home/annnpii/sessions/orca-multiagent/README.md`. Detail: skill `~/.agents/skills/mandordantukang/CLAUDE.md` (baca hanya kalau butuh).
+- **Klasifikasi dulu** (dari kompleksitas nyata):
+  - SIMPLE (≤ 15 baris, typo, CSS/regex, quickfix sepele): **langsung edit sendiri**. Jangan delegasi; bridge menolak spec SIMPLE tanpa `--force`.
+  - MEDIUM (komponen, bugfix kecil, multi-file terbatas) dan COMPLEX (fitur multi-file, migrasi/seeding DB, refactor lintas modul, full test suite, browser audit): delegasi ke Antigravity. COMPLEX dipecah jadi beberapa spec, pakai `"isolate": true`.
+- **Delegasi = spec JSON** (bukan esai): `orca-bridge delegate --spec - <<'EOF' {"task_type","objective","allowed_files":[...],"required_changes":[...],"acceptance_criteria":[...],"verification_command","constraints":[...]} EOF`. Allowlist + 1 verify command wajib (kosong = deteksi otomatis npm/pnpm/yarn/bun/pytest/cargo/go). Jangan tempel ulang rules/isi file. Format lama `orca-bridge delegate "<Title>" "- Allowed Files: ...\n- Verify Command: ..."` masih boleh.
+- **Gate (Strict Max 1 Pass, tanpa consensus triad)**: laporan Tukang datang dengan `CHECK {...}` dari bridge (verify dijalankan ulang, diff dicek vs allowlist + file sensitif).
+  - `approvable: true` + acceptance criteria cocok: **WAJIB LANGSUNG** `orca-bridge task approve <id>`. Ragu satu file: `orca-bridge task diff <id>`, jangan scan repo.
+  - Kurang: `orca-bridge task reject <id> "<fix spesifik 1 kalimat>"` (maks 1 retry, lalu Mandor ambil alih). Dilarang ronde 2/3/fix2 untuk nitpick kosmetik; nitpick kecil edit sendiri.
+  - Scope dilanggar: `task revert <id> --outside-only` atau `task amend <id> --allow <file>`, lalu `task check <id>`. BLOCKED: amend + `task resume <id>`, atau `task reject <id> --final`.
+  - Tukang hilang/crash: `task resume <id>` (jangan planning ulang). Status: `orca-bridge status`, `orca-bridge task list active`.
+- **Token**: `orca-bridge usage report`; usage Tukang manual via `usage add ... --source actual|estimated` (estimasi jangan pernah ditulis actual).
+- **Output ke User (Aan)**: Indonesia gaul Gen-Z ultra-ringkas (Caveman Ultra), maks 3-4 bullet (< 50 kata), tanpa esai naratif.
+- **Anti-Oververification**: Wajib prefix `rtk`. Dilarang spawn background daemon/curl server ad-hoc atau script Python inline panjang. Gunakan `semantex`, `serena`, `xerj`.

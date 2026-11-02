@@ -375,6 +375,40 @@ t_install_rollback() {
   has "previous orca-pair restored by rollback" "old" "$(cat "$home/.local/bin/orca-pair")"
 }
 
+t_install_global_rules() {
+  local home="$T/home" r="$T/home/.omp/agent/RULES.md" g="$T/home/.gemini/GEMINI.md"
+  mkdir -p "$home/.omp/agent" "$home/.gemini/config/skills"
+  printf '# mine\nkeep top\n<!-- mandordantukang:start -->\nold block\n<!-- mandordantukang:end -->\nkeep bottom\n' > "$r"
+  printf '# agy rules\nkeep\n' > "$g"
+  local env=(env HOME="$home" XDG_DATA_HOME="$home/.local/share")
+  yes "install --global-rules" "${env[@]}" bash "$ROOT/scripts/install.sh" --global-rules
+  has "omp block replaced in place" $'keep top\n<!-- mandordantukang:start -->\n## Orca Dual-Engine Multi-Agent: MANDOR' "$(cat "$r")"
+  has "omp text after block kept" "keep bottom" "$(cat "$r")"
+  hasnt "old block content gone" "old block" "$(cat "$r")"
+  has "agy block appended" "TUKANG (mandordantukang, global)" "$(cat "$g")"
+  has "agy own rules kept" "keep" "$(cat "$g")"
+  [[ -L "$home/.gemini/config/skills/mandordantukang" ]] && ok "agy skill linked" || bad "agy skill link missing"
+  yes "re-run" "${env[@]}" bash "$ROOT/scripts/install.sh" --global-rules
+  [[ "$(grep -c 'mandordantukang:start' "$g")" == 1 ]] && ok "re-run does not duplicate block" || bad "duplicate block"
+  yes "uninstall" "${env[@]}" bash "$ROOT/scripts/install.sh" --uninstall
+  hasnt "omp block removed" "mandordantukang:start" "$(cat "$r")"
+  has "user omp rules intact" $'keep top\nkeep bottom' "$(cat "$r")"
+  [[ ! -e "$home/.gemini/config/skills/mandordantukang" ]] && ok "agy link removed" || bad "agy link left"
+  printf '<!-- mandordantukang:start -->\nno end\n' > "$g"
+  no "unbalanced markers refused (no truncation)" "${env[@]}" bash "$ROOT/scripts/install.sh" --global-rules
+  has "file untouched" "no end" "$(cat "$g")"
+}
+t_install_upgrade_from_v01() {
+  git -C "$ROOT" cat-file -e 716364c:AGENTS.md 2>/dev/null || { ok "skip (no v0.1 history)"; return; }
+  local home="$T/home" sk="$T/home/.agents/skills/mandordantukang"
+  mkdir -p "$sk"
+  git -C "$ROOT" show 716364c:AGENTS.md > "$sk/AGENTS.md"     # pristine v0.1 copy, no manifest
+  printf 'mine\n' > "$sk/GEMINI.md"                           # user-edited file
+  yes "install over v0.1 skill dir" env HOME="$home" XDG_DATA_HOME="$home/.local/share" bash "$ROOT/scripts/install.sh"
+  cmp -s "$ROOT/AGENTS.md" "$sk/AGENTS.md" && ok "unedited v0.1 file upgraded" || bad "v0.1 file not upgraded"
+  has "edited file kept" "mine" "$(cat "$sk/GEMINI.md")"
+}
+
 TESTS=(t_routing_title_match t_routing_no_arbitrary_fallback t_routing_ambiguous t_routing_other_worktree_ignored
   t_routing_self_send_refused t_routing_layout_fallback t_wait_and_send_failures t_legacy_delegate_contract
   t_spec_validation t_verify_detection t_happy_path_shared t_report_autodetects_single_active_task
@@ -382,7 +416,7 @@ TESTS=(t_routing_title_match t_routing_no_arbitrary_fallback t_routing_ambiguous
   t_change_after_verify t_baseline_dirty_files t_secret_file_detection t_reject_retry_limit
   t_simple_task_not_delegated t_concurrent_shared_tasks t_isolated_task t_isolated_reject_never_lands
   t_recovery_after_send_failure t_blocked_amend_resume t_lock_stale_and_busy t_usage_tracking t_single_mode
-  t_orca_pair_binds_spawned_terminals t_install_lifecycle t_install_rollback)
+  t_orca_pair_binds_spawned_terminals t_install_lifecycle t_install_rollback t_install_global_rules t_install_upgrade_from_v01)
 for t in "${TESTS[@]}"; do run "$t"; done
 
 echo

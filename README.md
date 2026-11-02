@@ -134,6 +134,12 @@ cd ~/.agents/skills/mandordantukang
 
 Perintah ini akan memasang binary `orca-bridge` dan `orca-pair` ke `~/.local/bin/` dan `mandor-lib.js` ke `~/.local/share/mandordantukang/`. Aman diulang (upgrade): file lama di-backup, symlink tidak ditimpa lewat target-nya, skill yang sudah kamu edit tidak ditimpa (versi baru disimpan sebagai `.new`, `--force` untuk menimpa), gagal di tengah = rollback. Uninstall: `./scripts/install.sh --uninstall`.
 
+Aktifkan flow untuk semua project (omp + agy), sekali jalan:
+```bash
+./scripts/install.sh --global-rules
+```
+Menulis blok `<!-- mandordantukang:start/end -->` dari `rules/mandor.md` ke `~/.omp/agent/RULES.md` (omp, Mandor) dan `rules/tukang.md` ke `~/.gemini/GEMINI.md` (agy, Tukang), plus link skill untuk agy di `~/.gemini/config/skills/`. Isi file di luar blok tidak disentuh, file lama di-backup, diulang tidak dobel, `--uninstall` menghapus blok. Override path: `OMP_RULES`, `AGY_RULES`, `AGY_SKILLS`.
+
 Butuh: `bash`, `git`, `node >= 16`, Orca IDE (`orca` CLI). Opsional: `timeout` (coreutils) untuk batas waktu verify.
 
 ### 2. Jalankan Dual-Engine di Proyek Manapun
