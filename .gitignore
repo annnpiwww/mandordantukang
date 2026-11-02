@@ -23,3 +23,8 @@ npm-debug.log*
 __pycache__/
 *.pyc
 .venv/
+.semantex/
+.codegraph/
+graphify-out/
+.omc/
+.serena/
