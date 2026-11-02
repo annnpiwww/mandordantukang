@@ -78,8 +78,9 @@ fi
 # 3. Setup local helper scripts/orca-bridge.sh
 mkdir -p "$TARGET_DIR/scripts"
 if [[ ! -e "$TARGET_DIR/scripts/orca-bridge.sh" ]]; then
-  echo "🔗 Linking scripts/orca-bridge.sh -> /home/annnpii/.local/bin/orca-bridge..."
-  ln -sf /home/annnpii/.local/bin/orca-bridge "$TARGET_DIR/scripts/orca-bridge.sh"
+  local_bridge="$(command -v orca-bridge || echo "${HOME}/.local/bin/orca-bridge")"
+  echo "🔗 Linking scripts/orca-bridge.sh -> $local_bridge..."
+  ln -sf "$local_bridge" "$TARGET_DIR/scripts/orca-bridge.sh"
 fi
 
 # 4. Auto-index Code Intelligence & Dual Knowledge Graph in background
@@ -147,7 +148,7 @@ fi
 
 # 7. Tampilkan status bridge terkini
 echo ""
-(cd "$TARGET_DIR" && /home/annnpii/.local/bin/orca-bridge status)
+(cd "$TARGET_DIR" && "${HOME}/.local/bin/orca-bridge" status)
 echo ""
 echo "✨ Orca Dual-Engine Pair aktif & sepaket di $TARGET_DIR!"
 echo "• Claude Opus 5.5 = Mandor / Arsitek (Task kecil ≤ 15 baris langsung edit, task besar delegasi ke Agy)"
