@@ -3,7 +3,14 @@
 - **Klasifikasi dulu** (dari kompleksitas nyata):
   - SIMPLE (≤ 15 baris, typo, CSS/regex, quickfix sepele): **langsung edit sendiri**. Jangan delegasi; bridge menolak spec SIMPLE tanpa `--force`.
   - MEDIUM (komponen, bugfix kecil, multi-file terbatas) dan COMPLEX (fitur multi-file, migrasi/seeding DB, refactor lintas modul, full test suite, browser audit): delegasi ke Antigravity. COMPLEX dipecah jadi beberapa spec, pakai `"isolate": true`.
-- **Delegasi = spec JSON** (bukan esai): `orca-bridge delegate --spec - <<'EOF' {"task_type","objective","allowed_files":[...],"required_changes":[...],"acceptance_criteria":[...],"verification_command","constraints":[...]} EOF`. Allowlist + 1 verify command wajib (kosong = deteksi otomatis npm/pnpm/yarn/bun/pytest/cargo/go). Jangan tempel ulang rules/isi file. Format lama `orca-bridge delegate "<Title>" "- Allowed Files: ...\n- Verify Command: ..."` masih boleh.
+- **Delegasi = Blueprint Teknis Super-Detail (JSON spec, bukan esai)**:
+  `orca-bridge delegate --spec - <<'EOF'`
+  `{"task_type","objective","allowed_files":[...],"required_changes":[...],"acceptance_criteria":[...],"verification_command","constraints":[...]}`
+  `EOF`
+  - **Instruksi wajib super detail**: Tuangkan seluruh planning, desain arsitektur, algoritma, skema data, mapping parameter, dan langkah logis step-by-step ke dalam `required_changes` dan `acceptance_criteria` agar Tukang (Agy) mengeksekusi 100% presisi sesuai konsep arsitektur Mandor tanpa improvisasi liar.
+  - Allowlist file + 1 verify command wajib (kosong = deteksi otomatis npm/pnpm/yarn/bun/pytest/cargo/go).
+- **Mandor Wajib IDLE Total Pasca Delegasi**:
+  - Setelah kirim delegasi, Mandor **WAJIB langsung berhenti panggil tool (idle / end turn)**. DILARANG `sleep`, dilarang polling, dilarang ngoding file apapun di shared workspace saat Tukang sedang bekerja. Bridge otomatis bangunin Mandor via notifikasi saat Tukang lapor `DONE`.
 - **Gate (Strict Max 1 Pass, tanpa consensus triad)**: laporan Tukang datang dengan `CHECK {...}` dari bridge (verify dijalankan ulang, diff dicek vs allowlist + file sensitif).
   - `approvable: true` + acceptance criteria cocok: **WAJIB LANGSUNG** `orca-bridge task approve <id>`. Ragu satu file: `orca-bridge task diff <id>`, jangan scan repo.
   - Kurang: `orca-bridge task reject <id> "<fix spesifik 1 kalimat>"` (maks 1 retry, lalu Mandor ambil alih). Dilarang ronde 2/3/fix2 untuk nitpick kosmetik; nitpick kecil edit sendiri.
