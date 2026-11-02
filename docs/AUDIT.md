@@ -64,7 +64,6 @@ Data nyata dari tracker (bukan benchmark): sesi audit ini, 29 call Opus dalam 10
 | P2 | Usage Antigravity belum bisa diambil otomatis. |
 | P2 | Atribusi usage omp berbasis jendela waktu per project; kerja lain di project yang sama selama task ikut terhitung. |
 | P2 | `isolate` memakai HEAD: perubahan uncommitted di tree utama tidak ikut ke worktree. |
-| P2 | `AGENTS.md` global user (`~/.agents/AGENTS.md`) masih menyebut "npm test lolos = approve"; di luar repo ini, tidak diubah. |
 
 ## G. Alur akhir
 ```mermaid
