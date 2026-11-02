@@ -1,83 +1,505 @@
 #!/usr/bin/env bash
-# scripts/orca-bridge.sh — Inter-Agent Relay & Cross-Platform Orchestration Bridge
-# Architecture: Claude Opus 5.5 (OTAK / Mandor) <--> Gemini 3.8 Flash High (Antigravity / Tukang Kerja) in Orca IDE
+# scripts/orca-bridge.sh — Inter-Agent Relay & Cross-Platform Orchestration Bridge (mandordantukang)
+# Architecture: Mandor (Claude Opus / OTAK, Pane 1) <--> Tukang (Antigravity / Gemini, Pane 2) in Orca IDE
 
 set -euo pipefail
 
-function get_terminals_json() {
-  local json
-  json=$(orca terminal list --json 2>/dev/null || true)
-  if [[ -z "$json" ]]; then
-    echo "Error: cannot reach Orca runtime. Is Orca open?" >&2
-    exit 1
+MANDOR_VERSION="0.2.0"
+SELF_PATH="$(readlink -f "${BASH_SOURCE[0]}" 2>/dev/null || echo "${BASH_SOURCE[0]}")"
+STATE_BASE="${MANDOR_STATE_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/mandordantukang}"
+SELF_HANDLE="${ORCA_TERMINAL_HANDLE:-}"
+
+# One temp dir per invocation (subshells write here too); lock dirs are released on exit.
+TMPD="$(mktemp -d)"
+CLEANUP=("$TMPD")
+cleanup() { local p; for p in "${CLEANUP[@]}"; do rm -rf -- "$p"; done; }
+trap cleanup EXIT
+tmpf() { mktemp "$TMPD/x.XXXXXX"; }
+
+die() { echo "[orca-bridge] error: $*" >&2; exit 1; }
+log() { echo "[orca-bridge] $*"; }
+now_ms() { echo $(( $(date +%s) * 1000 )); }
+key_of() { printf '%s-%s' "$(basename "$1" | tr -cd 'A-Za-z0-9._-')" "$(printf '%s' "$1" | cksum | cut -d' ' -f1)"; }
+
+LIB=""
+need_lib() {
+  [[ -n "$LIB" ]] && return 0
+  local c
+  for c in "${MANDOR_LIB:-}" "$(dirname "$SELF_PATH")/mandor-lib.js" "${XDG_DATA_HOME:-$HOME/.local/share}/mandordantukang/mandor-lib.js"; do
+    if [[ -n "$c" && -f "$c" ]]; then LIB="$c"; return 0; fi
+  done
+  die "mandor-lib.js not found (reinstall: scripts/install.sh)"
+}
+lib() { need_lib; node "$LIB" "$@"; }
+
+role_of() {
+  case "$1" in
+    omp|claude|otak|mandor) echo mandor ;;
+    agy|antigravity|gemini|worker|tukang) echo tukang ;;
+    *) return 1 ;;
+  esac
+}
+
+# ---------- paths & state ----------
+# An isolated task worktree lives under $STATE_BASE/repos/<repo>/tasks/<id>/wt; calls made from
+# inside it route and store state as if made from the worktree that created the task.
+ORIGIN_CWD=""
+origin_cwd() {
+  [[ -n "$ORIGIN_CWD" ]] && { echo "$ORIGIN_CWD"; return; }
+  local cwd; cwd="$(pwd -P)"
+  if [[ "$cwd" == "$STATE_BASE"/repos/*/tasks/*/wt || "$cwd" == "$STATE_BASE"/repos/*/tasks/*/wt/* ]]; then
+    local tdir="${cwd%%/wt*}"
+    cwd="$(lib get "$tdir/state.json" origin_cwd 2>/dev/null || echo "$cwd")"
   fi
-  echo "$json"
+  ORIGIN_CWD="$cwd"; echo "$cwd"
+}
+in_git() { git -C "$(origin_cwd)" rev-parse --git-dir >/dev/null 2>&1; }
+repo_root() { git -C "$(origin_cwd)" rev-parse --show-toplevel 2>/dev/null || origin_cwd; }
+pair_file() { mkdir -p "$STATE_BASE/pairs"; echo "$STATE_BASE/pairs/$(key_of "$(repo_root)").json"; }
+tasks_dir() {
+  in_git || die "task commands need a git repository (diff validation)"
+  local common; common="$(cd "$(origin_cwd)" && cd "$(git rev-parse --git-common-dir)" && pwd -P)"
+  [[ "$(basename "$common")" == .git ]] && common="$(dirname "$common")"
+  local d="$STATE_BASE/repos/$(key_of "$common")/tasks"
+  mkdir -p "$d"; echo "$d"
+}
+task_dir() {
+  local id="${1:-}"
+  [[ "$id" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$ ]] || die "invalid task id '$id'"
+  local d; d="$(tasks_dir)/$id"
+  [[ -f "$d/task.json" ]] || die "unknown task '$id' (orca-bridge task list)"
+  echo "$d"
+}
+event() { printf '%s\t%s\n' "$(date -u +%FT%TZ)" "$2" >> "$1/events.log"; }
+tstate() { lib get "$1/state.json" state 2>/dev/null || echo PENDING; }
+set_state() { lib set "$1/state.json" state "$2" updated_at "$(now_ms)"; event "$1" "state -> $2${3:+ ($3)}"; }
+require_state() {
+  local cur; cur="$(tstate "$1")"; shift
+  local s; for s in "$@"; do [[ "$cur" == "$s" ]] && return 0; done
+  die "task is $cur; allowed here: $*"
 }
 
-function get_worktree_path() {
-  local json
-  json=$(get_terminals_json)
-  node -e '
-    const data = JSON.parse(process.argv[1]);
-    const cwd = process.cwd();
-    const terminals = data.result?.terminals || [];
-    let match = terminals.find(t => t.worktreePath && (cwd === t.worktreePath || cwd.startsWith(t.worktreePath + "/")));
-    const p = match ? match.worktreePath : (terminals[0]?.worktreePath || cwd);
-    process.stdout.write(p);
-  ' "$json"
+# Per-task mutex: mkdir is atomic; a lock whose pid is dead is stale and reclaimed.
+lock_task() {
+  local l="$1/.lock" pid
+  if ! mkdir "$l" 2>/dev/null; then
+    pid="$(cat "$l/pid" 2>/dev/null || true)"
+    if [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null; then die "task busy (pid $pid holds $l)"; fi
+    rm -rf -- "$l"; mkdir "$l" || die "cannot lock $l"
+  fi
+  echo $$ > "$l/pid"; CLEANUP+=("$l")
 }
 
-function get_handle() {
-  local target="$1"
-  local json
-  json=$(get_terminals_json)
+# ---------- terminal routing ----------
+TERMS_FILE=""
+terms_file() {
+  if [[ -z "$TERMS_FILE" ]]; then
+    local json
+    json="$(orca terminal list --json 2>/dev/null || true)"
+    [[ -n "$json" ]] || die "cannot reach Orca runtime. Is Orca open?"
+    TERMS_FILE="$(tmpf)"
+    printf '%s' "$json" > "$TERMS_FILE"
+  fi
+  echo "$TERMS_FILE"
+}
+HANDLE=""; HANDLE_SRC=""
+# resolve_handle <role> [exclude_self=1]: pair binding > title match (unique only) > Orca split layout.
+resolve_handle() {
+  local role="$1" excl="${2:-1}" out self=""
+  terms_file >/dev/null
+  [[ "$excl" == 1 ]] && self="$SELF_HANDLE"
+  out="$(lib resolve "$role" "$TERMS_FILE" "$(origin_cwd)" "$self" "$(pair_file)")" || return 1
+  HANDLE="${out%%$'\t'*}"; HANDLE_SRC="${out#*$'\t'}"
+}
+target_handle() {
+  local role; role="$(role_of "$1")" || die "unknown target '$1'. Use omp|agy (mandor|tukang)."
+  resolve_handle "$role" || exit 1
+  [[ -n "$SELF_HANDLE" && "$HANDLE" == "$SELF_HANDLE" ]] && die "$role resolves to this terminal ($HANDLE); refusing self-send. Fix: orca-bridge pair bind $role <handle>"
+  return 0
+}
+# deliver <role> <handle> <text>: send + Enter; tukang (agy TUI) also gets the Alt+M queue flush.
+deliver() {
+  orca terminal send --terminal "$2" --text "$3" --enter --json >/dev/null 2>&1 || die "send to $1 ($2) failed"
+  if [[ "$1" == tukang ]]; then
+    sleep 0.15
+    orca terminal send --terminal "$2" --text "$(printf '\033m')" --json >/dev/null 2>&1 || true
+  fi
+}
 
-  if [[ "$target" == "omp" || "$target" == "claude" || "$target" == "otak" ]]; then
-    node -e '
-      const data = JSON.parse(process.argv[1]);
-      const cwd = process.cwd();
-      const terminals = data.result?.terminals || [];
-      let localTerms = terminals.filter(t => t.worktreePath && (cwd === t.worktreePath || cwd.startsWith(t.worktreePath + "/")));
-      let pool = localTerms.length > 0 ? localTerms : terminals;
-      let term = pool.find(t => t.title && /omp|(^|\s)pi(\s|$)|claude/i.test(t.title));
-      if (!term && pool[0]) {
-        const vl = data.result?.visualLayouts?.find(v => v.worktreePath && (cwd === v.worktreePath || cwd.startsWith(v.worktreePath + "/")));
-        if (vl?.root?.first?.tabs?.[0]?.panes?.handle) {
-          term = terminals.find(t => t.handle === vl.root.first.tabs[0].panes.handle);
-        } else if (vl?.root?.tabs?.[0]?.panes?.first?.handle) {
-          term = terminals.find(t => t.handle === vl.root.tabs[0].panes.first.handle);
-        }
-      }
-      if (!term) term = pool.find(t => t.title && /omp|claude|pi/i.test(t.title));
-      if (!term && pool.length > 0) term = pool[0];
-      if (term) process.stdout.write(term.handle);
-    ' "$json"
-  elif [[ "$target" == "agy" || "$target" == "antigravity" || "$target" == "gemini" || "$target" == "worker" ]]; then
-    node -e '
-      const data = JSON.parse(process.argv[1]);
-      const cwd = process.cwd();
-      const terminals = data.result?.terminals || [];
-      let localTerms = terminals.filter(t => t.worktreePath && (cwd === t.worktreePath || cwd.startsWith(t.worktreePath + "/")));
-      let pool = localTerms.length > 0 ? localTerms : terminals;
-      let term = pool.find(t => t.title && /antigravity|(^|[\s:])agy(\s|$)|gemini/i.test(t.title));
-      if (!term && pool[0]) {
-        const vl = data.result?.visualLayouts?.find(v => v.worktreePath && (cwd === v.worktreePath || cwd.startsWith(v.worktreePath + "/")));
-        if (vl?.root?.second?.tabs?.[0]?.panes?.handle) {
-          term = terminals.find(t => t.handle === vl.root.second.tabs[0].panes.handle);
-        } else if (vl?.root?.tabs?.[0]?.panes?.second?.handle) {
-          term = terminals.find(t => t.handle === vl.root.tabs[0].panes.second.handle);
-        }
-      }
-      if (!term) term = pool.find(t => t.title && /agy|antigravity|gemini/i.test(t.title));
-      if (!term && pool.length > 1) term = pool[1];
-      if (term) process.stdout.write(term.handle);
-    ' "$json"
+# ---------- verification ----------
+detect_verify() {
+  local d="$1" pm
+  if [[ -f "$d/package.json" ]] && pm="$(node -e '
+      const p = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8")); const t = (p.scripts || {}).test;
+      if (!t || /no test specified/.test(t)) process.exit(1);
+      process.stdout.write(String(p.packageManager || "").split("@")[0]);' "$d/package.json" 2>/dev/null)"; then
+    if [[ "$pm" == bun || -f "$d/bun.lockb" || -f "$d/bun.lock" ]]; then echo "bun run test"
+    elif [[ "$pm" == pnpm || -f "$d/pnpm-lock.yaml" ]]; then echo "pnpm test"
+    elif [[ "$pm" == yarn || -f "$d/yarn.lock" ]]; then echo "yarn test"
+    else echo "npm test"; fi
+  elif [[ -f "$d/Cargo.toml" ]]; then echo "cargo test"
+  elif [[ -f "$d/go.mod" ]]; then echo "go test ./..."
+  elif [[ -f "$d/pytest.ini" || -f "$d/pyproject.toml" || -f "$d/setup.cfg" || -f "$d/tox.ini" ]]; then echo "python3 -m pytest -q"
+  elif [[ -f "$d/deno.json" || -f "$d/deno.jsonc" ]]; then echo "deno test"
+  elif [[ -f "$d/Makefile" ]] && grep -qE '^test:' "$d/Makefile"; then echo "make test"
+  else return 1; fi
+}
+
+VERIFY_RC=0; VERIFY_SECS=0
+run_verify() {
+  local dir="$1" cmd="$2" to="$3" logf="$4" start=$SECONDS t=""
+  command -v timeout >/dev/null 2>&1 && t=timeout
+  [[ -z "$t" ]] && command -v gtimeout >/dev/null 2>&1 && t=gtimeout
+  VERIFY_RC=0
+  if [[ -n "$t" ]]; then
+    (cd "$dir" && "$t" -k 10 "$to" bash -c "$cmd") >"$logf" 2>&1 || VERIFY_RC=$?
   else
-    echo "Unknown target: $target. Use 'omp' or 'agy'." >&2
-    exit 1
+    echo "[orca-bridge] warn: no timeout(1); verify runs unbounded" >&2
+    (cd "$dir" && bash -c "$cmd") >"$logf" 2>&1 || VERIFY_RC=$?
+  fi
+  VERIFY_SECS=$((SECONDS - start))
+}
+
+# ---------- diff accounting ----------
+hash_of() { if [[ -e "$1" || -L "$1" ]]; then git hash-object --no-filters -- "$1"; else echo DELETED; fi; }
+is_sensitive_name() {
+  case "${1##*/}" in .env|.env.*|*.env|*.pem|*.key|*.p12|*.secret|id_rsa*|id_ed25519*) return 0 ;; esac
+  return 1
+}
+# Baseline = files already dirty/untracked before the task (content stored as blobs so `task revert`
+# can restore them) + gitignored secret files (hashed only, never written to the object store).
+snapshot_baseline() {
+  local root="$1" tdir="$2" e p h
+  : > "$tdir/baseline.tsv"; : > "$tdir/secrets.tsv"
+  while IFS= read -r -d '' e; do
+    p="${e:3}"
+    if [[ -e "$root/$p" ]] && ! is_sensitive_name "$p"; then h="$(git -C "$root" hash-object -w --no-filters -- "$p")"; else h="$(cd "$root" && hash_of "$p")"; fi
+    printf '%s\t%s\n' "$p" "$h" >> "$tdir/baseline.tsv"
+  done < <(git -C "$root" status --porcelain=v1 -z --untracked-files=all --no-renames)
+  list_secrets "$root" > "$tdir/secrets.tsv"
+}
+list_secrets() {
+  local root="$1" p
+  while IFS= read -r -d '' p; do
+    [[ "$p" == */ ]] && continue
+    is_sensitive_name "$p" && printf '%s\t%s\n' "$p" "$(cd "$root" && hash_of "$p")"
+  done < <(git -C "$root" ls-files -z --others --ignored --exclude-standard --directory)
+  return 0
+}
+tsv_get() { awk -F'\t' -v k="$2" '$1==k {print $2; exit}' "$1"; }
+
+# changed_shared <root> <tdir> <base>: files whose content differs from what the task started with.
+changed_shared() {
+  local root="$1" tdir="$2" base="$3" f b cand
+  cand="$(tmpf)"
+  { git -C "$root" diff --name-only --no-renames -z "$base" --; git -C "$root" ls-files -z --others --exclude-standard; } \
+    | tr '\0' '\n' | sort -u > "$cand"
+  while IFS= read -r f; do
+    [[ -z "$f" ]] && continue
+    b="$(tsv_get "$tdir/baseline.tsv" "$f")"
+    if [[ -n "$b" && "$b" == "$(cd "$root" && hash_of "$f")" ]]; then continue; fi
+    echo "$f"
+  done < "$cand"
+  # Baseline-dirty files restored to the base version no longer show in the diff but did change.
+  while IFS=$'\t' read -r f b; do
+    [[ -z "$f" ]] || grep -qxF -- "$f" "$cand" && continue
+    [[ "$b" != "$(cd "$root" && hash_of "$f")" ]] && echo "$f"
+  done < "$tdir/baseline.tsv"
+  diff_secrets "$root" "$tdir"
+}
+diff_secrets() {
+  local root="$1" tdir="$2" now f h
+  now="$(tmpf)"
+  list_secrets "$root" > "$now"
+  while IFS=$'\t' read -r f h; do [[ -n "$f" && "$(tsv_get "$tdir/secrets.tsv" "$f")" != "$h" ]] && echo "$f"; done < "$now"
+  while IFS=$'\t' read -r f h; do [[ -n "$f" && -z "$(tsv_get "$now" "$f")" ]] && echo "$f"; done < "$tdir/secrets.tsv"
+  return 0
+}
+changed_iso() {
+  local wt="$1" base="$2"
+  git -C "$wt" add -A >/dev/null
+  git -C "$wt" diff --cached --name-only --no-renames "$base"
+}
+fingerprint() { local dir="$1" f; while IFS= read -r f; do [[ -n "$f" ]] && printf '%s\t%s\n' "$f" "$(cd "$dir" && hash_of "$f")"; done < "$2" | cksum | cut -d' ' -f1; }
+
+# ---------- task lifecycle ----------
+task_new() {
+  local spec="${1:-}" tmp id dv tdir
+  [[ -n "$spec" ]] || die "usage: orca-bridge task new <spec.json|->"
+  tmp="$(tmpf)"
+  if [[ "$spec" == - ]]; then cat > "$tmp"; else [[ -f "$spec" ]] || die "spec not found: $spec"; cp "$spec" "$tmp"; fi
+  id="t$(date +%Y%m%d-%H%M%S)-$(printf '%04x' $((RANDOM % 65536)))"
+  dv="$(detect_verify "$(repo_root)" || true)"
+  local out="$tmp.task"; CLEANUP+=("$out")
+  lib validate "$tmp" "$out" "$id" "$dv" >&2 || exit 1
+  id="$(lib get "$out" task_id)"
+  tdir="$(tasks_dir)/$id"
+  mkdir "$tdir" 2>/dev/null || die "task '$id' already exists (no duplicate execution)"
+  mv "$out" "$tdir/task.json"
+  lib set "$tdir/state.json" state PENDING retries 0 resumes 0 created_at "$(now_ms)" updated_at "$(now_ms)" origin_cwd "$(origin_cwd)" root "$(repo_root)"
+  event "$tdir" "created ($(lib get "$tdir/task.json" task_type), verify: $(lib get "$tdir/task.json" verification_command) [$(lib get "$tdir/task.json" verification_source)])"
+  echo "$id"
+}
+
+send_handoff() {
+  local tdir="$1" attempt="$2" fix="${3:-}" wt="" msg
+  wt="$(lib get "$tdir/state.json" isolate_dir 2>/dev/null || true)"
+  msg="$(lib handoff "$tdir/task.json" "$wt" "$attempt" "$fix")"
+  target_handle tukang
+  deliver tukang "$HANDLE" "$msg"
+  lib set "$tdir/state.json" tukang_handle "$HANDLE" mandor_handle "$SELF_HANDLE"
+  printf '{"ts":%s,"role":"tukang","kind":"handoff","source":"estimated","input":%s}\n' "$(now_ms)" $(( (${#msg} + 3) / 4 )) >> "$tdir/usage.jsonl"
+  event "$tdir" "handoff sent to $HANDLE ($HANDLE_SRC), ${#msg} chars"
+}
+
+task_assign() {
+  local id="" force=0 a
+  for a in "$@"; do case "$a" in --force) force=1 ;; *) id="$a" ;; esac; done
+  local tdir; tdir="$(task_dir "$id")"
+  lock_task "$tdir"
+  require_state "$tdir" PENDING
+  local type mode; type="$(lib get "$tdir/task.json" task_type)"; mode="$(lib get "$tdir/task.json" mode)"
+  if [[ "$type" == SIMPLE && "$force" != 1 && "$mode" != single ]]; then
+    die "SIMPLE task: a handoff costs more tokens than a direct edit. Mandor edits it directly (or --force)."
+  fi
+  local root base iso
+  root="$(repo_root)"
+  base="$(git -C "$root" rev-parse --verify -q HEAD)" || die "repository has no commits; commit once before delegating"
+  iso="$(lib get "$tdir/task.json" isolate)"
+  if [[ "$iso" != true ]]; then
+    local others; others="$(lib list "$(tasks_dir)" shared | cut -f1 | grep -vx "$id" || true)"
+    [[ -z "$others" ]] || die "shared-tree task(s) already active: $others. Diffs would mix; finish them or use \"isolate\": true."
+  fi
+  snapshot_baseline "$root" "$tdir"
+  lib set "$tdir/state.json" base "$base"
+  if [[ "$iso" == true ]]; then
+    git -C "$root" worktree add --detach "$tdir/wt" "$base" >/dev/null 2>&1 || die "git worktree add failed"
+    lib set "$tdir/state.json" isolate_dir "$tdir/wt"
+    event "$tdir" "isolated worktree $tdir/wt @ ${base:0:12}"
+  fi
+  set_state "$tdir" ASSIGNED
+  if [[ "$mode" == single ]]; then
+    # Single-agent baseline (benchmarks): same gate and accounting, no handoff.
+    set_state "$tdir" EXECUTING single
+    log "task $id (single-agent): Mandor implements it, then: orca-bridge task check $id && orca-bridge task approve $id"
+    return 0
+  fi
+  # Subshell so a routing/send failure (which exits) still lets us record FAILED; recover with task resume.
+  if ! (send_handoff "$tdir" 0); then set_state "$tdir" FAILED "handoff delivery failed"; exit 1; fi
+  set_state "$tdir" EXECUTING
+  log "task $id -> Tukang ($(lib get "$tdir/state.json" tukang_handle)). Waiting for: orca-bridge report DONE --task $id"
+}
+
+# collect_changed <tdir> <out> <main_out>: sorted task change set. Isolated tasks: worktree diff plus
+# secret files touched in the main tree; main-tree edits go to <main_out> (may be Mandor's own work).
+collect_changed() {
+  local tdir="$1" out="$2" mainf="$3" root base wt sec
+  root="$(lib get "$tdir/state.json" root)"; base="$(lib get "$tdir/state.json" base)"
+  wt="$(lib get "$tdir/state.json" isolate_dir 2>/dev/null || true)"
+  : > "$mainf"
+  if [[ -n "$wt" ]]; then
+    [[ -d "$wt" ]] || return 1
+    sec="$(tmpf)"; diff_secrets "$root" "$tdir" > "$sec"
+    changed_shared "$root" "$tdir" "$base" | grep -vxF -f "$sec" | sort -u > "$mainf" || true
+    { changed_iso "$wt" "$base"; cat "$sec"; } | sort -u > "$out"
+  else
+    changed_shared "$root" "$tdir" "$base" | sort -u > "$out"
   fi
 }
 
+# task_check <tdir>: verification + scope, run by the bridge itself (never trusts a self-report).
+# Verify runs first so files it generates are part of the checked (and fingerprinted) change set.
+task_check() {
+  local tdir="$1" root base wt changed scopef dir cmd to rc=0 stat fp mainf
+  root="$(lib get "$tdir/state.json" root)"; base="$(lib get "$tdir/state.json" base)"
+  wt="$(lib get "$tdir/state.json" isolate_dir 2>/dev/null || true)"
+  dir="${wt:-$root}"
+  [[ -z "$wt" || -d "$wt" ]] || { set_state "$tdir" FAILED "isolated worktree missing"; die "worktree $wt missing"; }
+  set_state "$tdir" VERIFYING
+  changed="$tdir/changed.txt"; scopef="$tdir/scope.json"; mainf="$tdir/main_changed.txt"
+  cmd="$(lib get "$tdir/task.json" verification_command)"
+  to="$(lib get "$tdir/task.json" verify_timeout)"
+  if [[ "$cmd" == none ]]; then VERIFY_RC=0; VERIFY_SECS=0; else run_verify "$dir" "$cmd" "$to" "$tdir/verify.log"; fi
+  collect_changed "$tdir" "$changed" "$mainf"
+  if [[ -n "$wt" ]]; then
+    stat="$(git -C "$wt" diff --cached --shortstat "$base" | sed 's/^ //')"
+  else
+    stat="$(git -C "$root" diff --shortstat "$base" | sed 's/^ //')"
+    local nu; nu="$(git -C "$root" ls-files --others --exclude-standard | grep -cxF -f "$changed" || true)"
+    [[ "${nu:-0}" -gt 0 ]] && stat="${stat:+$stat, }$nu untracked"
+  fi
+  lib scope "$tdir/task.json" "$changed" > "$scopef"
+  fp="$(fingerprint "$dir" "$changed")"
+  event "$tdir" "check: verify exit $VERIFY_RC in ${VERIFY_SECS}s, $(wc -l < "$changed" | tr -d ' ') changed"
+  lib record-check "$tdir/state.json" "$scopef" "$cmd" "$VERIFY_RC" "$VERIFY_SECS" "$tdir/verify.log" "$fp" "${stat:-0 files}" "$mainf" || rc=$?
+  set_state "$tdir" REVIEWING
+  return $rc
+}
+
+task_approve() {
+  local id="" allow_empty=0 a
+  for a in "$@"; do case "$a" in --allow-empty) allow_empty=1 ;; *) id="$a" ;; esac; done
+  local tdir; tdir="$(task_dir "$id")"
+  lock_task "$tdir"
+  require_state "$tdir" REVIEWING
+  [[ "$(lib get "$tdir/state.json" blocked 2>/dev/null || echo false)" == true ]] && die "task is BLOCKED by Tukang; amend + resume, or reject"
+  lib get "$tdir/state.json" checks >/dev/null 2>&1 || die "no check recorded; run: orca-bridge task check $id"
+  [[ "$(lib get "$tdir/state.json" checks.scope.ok)" == true ]] || die "scope violation: $(lib get "$tdir/state.json" checks.scope). Revert (task revert $id --outside-only) or amend, then task check."
+  local v; v="$(lib get "$tdir/state.json" checks.verify)"
+  if [[ "$(lib get "$tdir/state.json" checks.verify.skipped 2>/dev/null || echo false)" != true ]]; then
+    [[ "$(lib get "$tdir/state.json" checks.verify.exit)" == 0 ]] || die "verification failed: $v"
+  fi
+  local changed="$tdir/changed.txt" wt root dir now
+  [[ -s "$changed" || "$allow_empty" == 1 ]] || die "no changes recorded (use --allow-empty if intended)"
+  wt="$(lib get "$tdir/state.json" isolate_dir 2>/dev/null || true)"
+  root="$(lib get "$tdir/state.json" root)"
+  dir="${wt:-$root}"
+  # Re-derive the change set: a file edited or added after verification must not ride along unverified.
+  now="$(tmpf)"; collect_changed "$tdir" "$now" "$(tmpf)"
+  if ! cmp -s "$now" "$changed" || [[ "$(fingerprint "$dir" "$now")" != "$(lib get "$tdir/state.json" checks.fingerprint)" ]]; then
+    die "files changed after verification; run: orca-bridge task check $id"
+  fi
+  if [[ -n "$wt" ]]; then
+    local patch="$tdir/approved.patch" base
+    base="$(lib get "$tdir/state.json" base)"
+    git -C "$wt" diff --cached --binary "$base" > "$patch"
+    if [[ -s "$patch" ]]; then
+      git -C "$root" apply --binary "$patch" 2>/dev/null || git -C "$root" apply --3way --binary "$patch" \
+        || die "patch does not apply to $root (kept: $patch). Resolve, then re-run approve."
+    fi
+    git -C "$root" worktree remove --force "$wt" >/dev/null 2>&1 || true
+    lib set "$tdir/state.json" isolate_dir null
+    event "$tdir" "applied isolated patch to $root"
+  fi
+  lib set "$tdir/state.json" closed_at "$(now_ms)"
+  set_state "$tdir" APPROVED
+  usage_collect "$tdir" >/dev/null 2>&1 || true
+  log "APPROVED $id. Criteria: $(lib get "$tdir/task.json" acceptance_criteria | tr '\n' ';')"
+}
+
+task_reject() {
+  local id="" final=0 fix="" a
+  for a in "$@"; do case "$a" in --final) final=1 ;; *) if [[ -z "$id" ]]; then id="$a"; else fix="${fix:+$fix }$a"; fi ;; esac; done
+  local tdir; tdir="$(task_dir "$id")"
+  lock_task "$tdir"
+  require_state "$tdir" REVIEWING
+  local r max
+  r=$(( $(lib get "$tdir/state.json" retries) + 1 )); max="$(lib get "$tdir/task.json" max_retries)"
+  [[ "$final" == 1 || "$r" -gt "$max" ]] || [[ -n "$fix" ]] || die "reject needs a targeted correction: orca-bridge task reject $id \"<what to fix>\""
+  lib set "$tdir/state.json" blocked false
+  if [[ "$final" == 1 || "$r" -gt "$max" ]]; then
+    lib set "$tdir/state.json" closed_at "$(now_ms)" retries "$r"
+    set_state "$tdir" REJECTED "${fix:-final}"
+    usage_collect "$tdir" >/dev/null 2>&1 || true
+    if [[ -n "$(lib get "$tdir/state.json" isolate_dir 2>/dev/null || true)" ]]; then
+      log "REJECTED $id. Main tree untouched; drop the worktree with: orca-bridge task discard $id"
+    else
+      log "REJECTED $id (retry limit $max). Tukang's edits are still in the tree: inspect 'task diff $id', undo with 'task revert $id'. Mandor takes over."
+    fi
+    return 0
+  fi
+  (send_handoff "$tdir" "$r" "$fix") || die "correction not delivered; state unchanged (REVIEWING). Retry reject or task resume."
+  lib set "$tdir/state.json" retries "$r"
+  set_state "$tdir" EXECUTING "retry $r/$max"
+  log "retry $r/$max sent to Tukang"
+}
+
+task_resume() {
+  local tdir; tdir="$(task_dir "${1:-}")"
+  lock_task "$tdir"
+  require_state "$tdir" ASSIGNED EXECUTING VERIFYING REVIEWING FAILED
+  [[ -n "$(lib get "$tdir/state.json" base 2>/dev/null || true)" ]] || die "task was never assigned; use task assign"
+  lib set "$tdir/state.json" resumes $(( $(lib get "$tdir/state.json" resumes) + 1 )) blocked false
+  (send_handoff "$tdir" "$(lib get "$tdir/state.json" retries)" "RESUME: continue this task where it stopped; allowed_files may have been amended.") \
+    || die "resume not delivered; state unchanged"
+  set_state "$tdir" EXECUTING resume
+  log "task ${1} re-sent to Tukang"
+}
+
+task_revert() {
+  local id="" outside=0 a
+  for a in "$@"; do case "$a" in --outside-only) outside=1 ;; *) id="$a" ;; esac; done
+  local tdir; tdir="$(task_dir "$id")"
+  lock_task "$tdir"
+  [[ -z "$(lib get "$tdir/state.json" isolate_dir 2>/dev/null || true)" ]] || die "isolated task: nothing in the main tree to revert (use task discard)"
+  local root base f b list
+  root="$(lib get "$tdir/state.json" root)"; base="$(lib get "$tdir/state.json" base)"
+  list="$(tmpf)"
+  if [[ "$outside" == 1 ]]; then
+    node -e 'const s=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"));for(const f of [...s.out_of_scope,...s.sensitive])console.log(f)' "$tdir/scope.json" | sort -u > "$list"
+  else
+    changed_shared "$root" "$tdir" "$base" | sort -u > "$list"
+  fi
+  while IFS= read -r f; do
+    [[ -z "$f" ]] && continue
+    b="$(tsv_get "$tdir/baseline.tsv" "$f")"
+    if is_sensitive_name "$f" && [[ -z "$b" ]] && [[ -n "$(tsv_get "$tdir/secrets.tsv" "$f")" ]]; then
+      echo "[orca-bridge] cannot restore secret file '$f' (never copied); fix it by hand" >&2; continue
+    fi
+    if [[ "$b" == DELETED ]]; then rm -f -- "$root/$f"
+    elif [[ -n "$b" ]] && git -C "$root" cat-file -e "$b" 2>/dev/null; then mkdir -p "$(dirname "$root/$f")"; git -C "$root" cat-file blob "$b" > "$root/$f"
+    elif git -C "$root" cat-file -e "$base:$f" 2>/dev/null; then mkdir -p "$(dirname "$root/$f")"; git -C "$root" show "$base:$f" > "$root/$f"
+    else rm -f -- "$root/$f"; fi
+    echo "reverted $f"
+  done < "$list"
+  event "$tdir" "revert ($([[ $outside == 1 ]] && echo outside-only || echo all))"
+  [[ "$(tstate "$tdir")" == REVIEWING ]] && log "re-run: orca-bridge task check $id"
+  return 0
+}
+
+task_diff() {
+  local id="" statonly=0 a
+  for a in "$@"; do case "$a" in --stat) statonly=1 ;; *) id="$a" ;; esac; done
+  local tdir root base wt f
+  tdir="$(task_dir "$id")"
+  root="$(lib get "$tdir/state.json" root)"; base="$(lib get "$tdir/state.json" base 2>/dev/null)" || die "task not assigned yet"
+  wt="$(lib get "$tdir/state.json" isolate_dir 2>/dev/null || true)"
+  local flag=(--no-ext-diff); [[ "$statonly" == 1 ]] && flag+=(--stat)
+  if [[ -n "$wt" ]]; then git -C "$wt" add -A >/dev/null; git -C "$wt" --no-pager diff --cached "${flag[@]}" "$base"; return; fi
+  while IFS= read -r f; do
+    [[ -z "$f" ]] && continue
+    if git -C "$root" cat-file -e "$base:$f" 2>/dev/null; then git -C "$root" --no-pager diff "${flag[@]}" "$base" -- "$f"
+    elif [[ -e "$root/$f" ]]; then git -C "$root" --no-pager diff --no-index "${flag[@]}" /dev/null "$root/$f" || true; fi
+  done < <(changed_shared "$root" "$tdir" "$base" | sort -u)
+}
+
+usage_collect() {
+  local tdir="$1" from to out
+  from="$(lib get "$tdir/state.json" created_at)"; to="$(lib get "$tdir/state.json" closed_at 2>/dev/null || now_ms)"
+  out="$(lib usage-omp "${MANDOR_OMP_SESSIONS:-$HOME/.omp/agent/sessions}" "$(lib get "$tdir/state.json" origin_cwd)" "$from" "$to")" || return 1
+  # Replace any earlier collector row so repeated collects don't double count.
+  if [[ -f "$tdir/usage.jsonl" ]]; then grep -v '"kind":"omp-session"' "$tdir/usage.jsonl" > "$tdir/usage.jsonl.tmp" || true; mv "$tdir/usage.jsonl.tmp" "$tdir/usage.jsonl"; fi
+  printf '%s\n' "${out%\}},\"ts\":$(now_ms)}" >> "$tdir/usage.jsonl"
+  echo "$out"
+}
+
+usage_add() {
+  local id="${1:-}"; shift || true
+  local tdir role="" model="" in="" out="" cost="" calls=1 src="" note=""
+  tdir="$(task_dir "$id")"
+  while [[ $# -gt 0 ]]; do
+    [[ $# -ge 2 ]] || die "flag $1 needs a value"
+    case "$1" in
+      --role) role="$2" ;; --model) model="$2" ;;
+      --in) in="$2" ;; --out) out="$2" ;;
+      --cost) cost="$2" ;; --calls) calls="$2" ;;
+      --source) src="$2" ;; --note) note="$2" ;;
+      *) die "unknown flag $1" ;;
+    esac
+    shift 2
+  done
+  [[ "$role" == mandor || "$role" == tukang ]] || die "--role mandor|tukang required"
+  [[ "$src" == actual || "$src" == estimated ]] || die "--source actual|estimated required (never present estimates as actual)"
+  [[ "$in" =~ ^[0-9]+$ && "$out" =~ ^[0-9]+$ && "$calls" =~ ^[0-9]+$ ]] || die "--in/--out/--calls must be integers"
+  [[ -z "$cost" || "$cost" =~ ^[0-9]+(\.[0-9]+)?$ ]] || die "--cost must be a number (USD)"
+  node -e 'const [ts,role,model,i,o,cost,calls,src,note]=process.argv.slice(1);
+    const r={ts:+ts,role,kind:"manual",source:src,input:+i,output:+o,calls:+calls};
+    if(model)r.model=model; if(cost)r.cost=+cost; if(note)r.note=note; console.log(JSON.stringify(r));' \
+    "$(now_ms)" "$role" "$model" "$in" "$out" "$cost" "$calls" "$src" "$note" >> "$tdir/usage.jsonl"
+  log "usage recorded for $id ($role, $src)"
+}
+
+# ---------- commands ----------
 command="${1:-status}"
 
 case "$command" in
@@ -90,18 +512,10 @@ case "$command" in
       echo "Usage: orca-bridge send <omp|agy> <message>" >&2
       exit 1
     fi
-    handle=$(get_handle "$target")
-    if [[ -z "$handle" ]]; then
-      echo "Target terminal '$target' not found in Orca!" >&2
-      exit 1
-    fi
-    echo "[orca-bridge] Sending to $target ($handle)..."
-    orca terminal send --terminal "$handle" --text "$message" --enter --json >/dev/null
-    if [[ "$target" == "agy" || "$target" == "antigravity" || "$target" == "gemini" || "$target" == "worker" ]]; then
-      sleep 0.15
-      orca terminal send --terminal "$handle" --text "$(printf '\033m')" --json >/dev/null 2>&1 || true
-    fi
-    echo "[orca-bridge] Sent successfully!"
+    target_handle "$target"
+    log "Sending to $target ($HANDLE via $HANDLE_SRC)..."
+    deliver "$(role_of "$target")" "$HANDLE" "$message"
+    log "Sent."
     ;;
 
   # 2. CORE RELAY: Read terminal
@@ -112,15 +526,12 @@ case "$command" in
       echo "Usage: orca-bridge read <omp|agy> [lines]" >&2
       exit 1
     fi
-    handle=$(get_handle "$target")
-    if [[ -z "$handle" ]]; then
-      echo "Target terminal '$target' not found in Orca!" >&2
-      exit 1
-    fi
-    orca terminal read --terminal "$handle" --limit "$limit" 2>/dev/null || orca terminal show --terminal "$handle"
+    role="$(role_of "$target")" || die "unknown target '$target'"
+    resolve_handle "$role" 0 || exit 1
+    orca terminal read --terminal "$HANDLE" --limit "$limit" 2>/dev/null || orca terminal show --terminal "$HANDLE"
     ;;
 
-  # 3. CORE RELAY: Wait for idle
+  # 3. CORE RELAY: Wait for idle (exit 1 when not confirmed; never a false "ready")
   wait)
     target="${2:-}"
     timeout_ms="${3:-60000}"
@@ -128,65 +539,217 @@ case "$command" in
       echo "Usage: orca-bridge wait <omp|agy> [timeout_ms]" >&2
       exit 1
     fi
-    handle=$(get_handle "$target")
-    echo "[orca-bridge] Waiting for $target ($handle) to become idle (timeout: ${timeout_ms}ms)..."
-    orca terminal wait --terminal "$handle" --for tui-idle --timeout-ms "$timeout_ms" --json 2>/dev/null || true
-    echo "[orca-bridge] $target is ready / idle!"
+    [[ "$timeout_ms" =~ ^[0-9]+$ ]] || die "timeout_ms must be an integer"
+    role="$(role_of "$target")" || die "unknown target '$target'"
+    resolve_handle "$role" 0 || exit 1
+    log "Waiting for $target ($HANDLE) to become idle (timeout: ${timeout_ms}ms)..."
+    if orca terminal wait --terminal "$HANDLE" --for tui-idle --timeout-ms "$timeout_ms" --json >/dev/null 2>&1; then
+      log "$target is idle."
+    else
+      log "$target NOT confirmed idle (timeout or terminal gone)."
+      exit 1
+    fi
     ;;
 
-  # 4. DELEGATE TASK: Mandor (Opus) -> Worker (Antigravity)
+  # 4. DELEGATE TASK: Mandor -> Tukang
+  #    Structured: delegate --spec <file|-> [--force]   (validated JSON handoff, task state, bridge-run verify)
+  #    Legacy:     delegate <title> <details>          (details must name Allowed Files + Verify Command)
   delegate)
     shift || true
+    if [[ "${1:-}" == --spec ]]; then
+      spec="${2:-}"; shift 2 || true
+      id="$(task_new "$spec")"
+      task_assign "$id" "$@"
+      exit 0
+    fi
+    force=0
+    if [[ "${1:-}" == --force ]]; then force=1; shift; fi
     title="${1:-}"
     shift || true
     details="$*"
+    details="${details//\\n/$'\n'}"
     if [[ -z "$title" ]]; then
-      echo "Usage: orca-bridge delegate <task_title> [detailed instructions...]" >&2
+      echo "Usage: orca-bridge delegate --spec <spec.json|-> | delegate [--force] <task_title> <instructions>" >&2
       exit 1
     fi
-    formatted="[TASK DARI MANDOR (Opus 5.5)]
+    if [[ "$force" != 1 ]] && ! { grep -qi 'allowed files' <<<"$details" && grep -qi 'verify command' <<<"$details"; }; then
+      die "Anti-Handoff-Leak: instructions need 'Allowed Files:' and 'Verify Command:' (or use --spec / --force)"
+    fi
+    formatted="[TASK DARI MANDOR]
 📌 Title: $title
 📋 Detail & Instruksi:
 $details
 
 ⚡ Catatan Eksekusi:
-- Kerjakan langsung di codebase (hands-on).
-- Verifikasi dengan 'npm test' dan cek console 0 error.
-- Laporkan balik jika sudah selesai dengan 'orca-bridge report DONE ...'."
-    handle=$(get_handle "agy")
-    echo "[orca-bridge] Delegating task '$title' to Antigravity ($handle)..."
-    orca terminal send --terminal "$handle" --text "$formatted" --enter --json >/dev/null
-    sleep 0.15
-    orca terminal send --terminal "$handle" --text "$(printf '\033m')" --json >/dev/null 2>&1 || true
-    echo "[orca-bridge] Task delegated successfully!"
+- Sentuh HANYA Allowed Files; jangan scan repo.
+- Verifikasi pakai Verify Command dari Mandor di atas (bukan default npm test).
+- Selesai: orca-bridge report DONE \"<ringkas>\" | butuh file lain: orca-bridge report BLOCKED \"<file>: <alasan>\""
+    target_handle agy
+    log "Delegating task '$title' to Tukang ($HANDLE via $HANDLE_SRC)..."
+    deliver tukang "$HANDLE" "$formatted"
+    log "Task delegated."
     ;;
 
-  # 5. REPORT TASK: Worker (Antigravity) -> Mandor (Opus / Reviewer)
+  # 5. REPORT TASK: Tukang -> Mandor. With a task, the bridge runs scope + verify itself and
+  #    attaches the evidence, so Mandor reviews facts instead of re-exploring.
   report)
     shift || true
+    id=""
+    if [[ "${1:-}" == --task ]]; then id="${2:-}"; shift 2 || true; fi
     status="${1:-DONE}"
     shift || true
+    if [[ "${1:-}" == --task ]]; then id="${2:-}"; shift 2 || true; fi
     summary="$*"
     if [[ -z "$summary" ]]; then
-      echo "Usage: orca-bridge report <DONE|NEEDS_REVISION|BLOCKED> <summary...>" >&2
+      echo "Usage: orca-bridge report <DONE|NEEDS_REVISION|BLOCKED> [--task <id>] <summary...>" >&2
       exit 1
     fi
-    formatted="[@OTAK & Reviewer] Laporan Hasil Eksekusi Antigravity:
-Status : $status
-Rincian:
-$summary
-
-Silakan review git diff / jalankan gate approval."
-    handle=$(get_handle "omp")
-    echo "[orca-bridge] Sending report to OTAK/Opus ($handle)..."
-    orca terminal send --terminal "$handle" --text "$formatted" --enter --json >/dev/null
-    echo "[orca-bridge] Report sent to OTAK!"
+    case "$status" in DONE|NEEDS_REVISION|BLOCKED) ;; *) die "status must be DONE|NEEDS_REVISION|BLOCKED" ;; esac
+    if [[ -z "$id" ]] && in_git; then
+      active="$(lib list "$(tasks_dir)" active | awk -F'\t' '$2=="EXECUTING"{print $1}')"
+      [[ "$(grep -c . <<<"$active")" == 1 ]] && id="$active"
+    fi
+    check=""
+    if [[ -n "$id" ]]; then
+      tdir="$(task_dir "$id")"
+      lock_task "$tdir"
+      require_state "$tdir" EXECUTING
+      th="$(lib get "$tdir/state.json" tukang_handle 2>/dev/null || true)"
+      [[ -n "$SELF_HANDLE" && -n "$th" && "$SELF_HANDLE" != "$th" ]] && die "task $id belongs to terminal $th, not $SELF_HANDLE"
+      event "$tdir" "report $status: $summary"
+      if [[ "$status" == DONE ]]; then
+        check="$(task_check "$tdir" || true)"
+      else
+        lib set "$tdir/state.json" blocked true
+        set_state "$tdir" REVIEWING "$status"
+      fi
+    fi
+    formatted="[TUKANG REPORT${id:+ $id} $status] $summary"
+    [[ -n "$check" ]] && formatted+=$'\n'"$check"
+    if [[ -n "$id" ]]; then
+      if [[ "$status" == DONE ]]; then
+        formatted+=$'\n'"NEXT orca-bridge task approve $id | task reject $id \"<fix>\" | task diff $id"
+      else
+        formatted+=$'\n'"NEXT orca-bridge task amend $id --allow <file> && task resume $id | task reject $id --final"
+      fi
+    else
+      formatted+=$'\n'"Review git diff + jalankan Verify Command sebelum approve."
+    fi
+    target_handle omp
+    if [[ -n "$id" ]]; then
+      printf '{"ts":%s,"role":"mandor","kind":"handoff","source":"estimated","input":%s}\n' "$(now_ms)" $(( (${#formatted} + 3) / 4 )) >> "$tdir/usage.jsonl"
+    fi
+    log "Sending report to Mandor ($HANDLE via $HANDLE_SRC)..."
+    deliver mandor "$HANDLE" "$formatted"
+    [[ -n "$check" ]] && echo "$check"
+    log "Report sent."
     ;;
 
-  # 6. BROWSER INSPECTION: Shared Orca Browser
+  # 6. TASK STATE MACHINE
+  task)
+    sub="${2:-list}"
+    shift 2 || true
+    case "$sub" in
+      new) task_new "$@" ;;
+      assign) task_assign "$@" ;;
+      check)
+        tdir="$(task_dir "${1:-}")"; lock_task "$tdir"
+        require_state "$tdir" EXECUTING VERIFYING REVIEWING
+        task_check "$tdir"
+        ;;
+      approve) task_approve "$@" ;;
+      reject) task_reject "$@" ;;
+      resume) task_resume "$@" ;;
+      revert) task_revert "$@" ;;
+      amend)
+        id="${1:-}"; shift || true
+        [[ "${1:-}" == --allow && $# -ge 2 ]] || die "usage: orca-bridge task amend <id> --allow <path>..."
+        shift
+        tdir="$(task_dir "$id")"; lock_task "$tdir"
+        require_state "$tdir" PENDING EXECUTING REVIEWING
+        allowed="$(lib amend-allow "$tdir/task.json" "$@")" || exit 1
+        log "allowed_files: $allowed"
+        event "$tdir" "amend allow: $*"
+        ;;
+      fail)
+        id="${1:-}"; shift || true
+        tdir="$(task_dir "$id")"; lock_task "$tdir"
+        require_state "$tdir" PENDING ASSIGNED EXECUTING VERIFYING REVIEWING
+        lib set "$tdir/state.json" closed_at "$(now_ms)"
+        set_state "$tdir" FAILED "${*:-manual}"
+        log "FAILED $id. Recover with: orca-bridge task resume $id"
+        ;;
+      discard)
+        tdir="$(task_dir "${1:-}")"; lock_task "$tdir"
+        require_state "$tdir" REJECTED FAILED
+        wt="$(lib get "$tdir/state.json" isolate_dir 2>/dev/null || true)"
+        if [[ -n "$wt" ]]; then
+          git -C "$(lib get "$tdir/state.json" root)" worktree remove --force "$wt" >/dev/null 2>&1 || rm -rf -- "$wt"
+          lib set "$tdir/state.json" isolate_dir null
+        fi
+        event "$tdir" "discarded worktree"
+        log "discarded ${1}"
+        ;;
+      diff) task_diff "$@" ;;
+      status)
+        tdir="$(task_dir "${1:-}")"
+        echo "state: $(tstate "$tdir")"
+        lib get "$tdir/state.json" checks 2>/dev/null && echo || true
+        ;;
+      list) lib list "$(tasks_dir)" "${1:-all}" ;;
+      log)
+        tdir="$(task_dir "${1:-}")"
+        cat "$tdir/events.log"
+        [[ -f "$tdir/verify.log" ]] && { echo "--- verify.log (tail)"; tail -n 30 "$tdir/verify.log"; }
+        ;;
+      *) echo "Usage: orca-bridge task <new|assign|check|approve|reject|resume|revert|amend|fail|discard|diff|status|list|log>" >&2; exit 1 ;;
+    esac
+    ;;
+
+  # 7. TOKEN EFFICIENCY TRACKER
+  usage)
+    sub="${2:-report}"
+    shift 2 || true
+    case "$sub" in
+      add) usage_add "$@" ;;
+      collect) usage_collect "$(task_dir "${1:-}")" || die "no omp usage found for this task window" ;;
+      report) lib usage-report "$(tasks_dir)" "$@" ;;
+      compare) lib usage-compare "$(tasks_dir)" ;;
+      *) echo "Usage: orca-bridge usage <add <id> --role R --in N --out N --source actual|estimated [--model M --cost USD --calls N]|collect <id>|report [id] [--csv]|compare>" >&2; exit 1 ;;
+    esac
+    ;;
+
+  # 8. PAIR BINDING: deterministic terminal routing
+  pair)
+    sub="${2:-show}"
+    case "$sub" in
+      bind)
+        role="$(role_of "${3:-}")" || die "usage: orca-bridge pair bind <mandor|tukang> <handle>"
+        h="${4:-}"
+        [[ "$h" == term_* ]] || die "handle must look like term_..."
+        node -e 'const d=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"));process.exit((d.result?.terminals||[]).some(t=>t.handle===process.argv[2])?0:1)' "$(terms_file)" "$h" \
+          || die "handle $h is not a live Orca terminal"
+        lib set "$(pair_file)" "$role" "$h" worktree "$(repo_root)"
+        log "bound $role -> $h"
+        ;;
+      show) cat "$(pair_file)" 2>/dev/null || echo "{} (no binding; routing uses title/layout match)" ;;
+      clear) rm -f -- "$(pair_file)"; log "binding cleared" ;;
+      *) echo "Usage: orca-bridge pair <bind <mandor|tukang> <handle>|show|clear>" >&2; exit 1 ;;
+    esac
+    ;;
+
+  detect-verify) detect_verify "${2:-$(repo_root)}" || { echo "none detected" >&2; exit 1; } ;;
+
+  # 9. BROWSER INSPECTION: Shared Orca Browser
   browser)
     subcmd="${2:-snapshot}"
-    wt=$(get_worktree_path)
+    terms_file >/dev/null
+    # Orca worktree containing cwd (longest match), else cwd: browser tabs are keyed by Orca worktree.
+    wt="$(node -e '
+      const d = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8")); const cwd = process.argv[2];
+      const hit = (d.result?.terminals || []).map(t => t.worktreePath).filter(p => p && (cwd === p || cwd.startsWith(p + "/")))
+        .sort((a, b) => b.length - a.length)[0];
+      process.stdout.write(hit || cwd);' "$TERMS_FILE" "$(origin_cwd)")"
     wt_arg=()
     if [[ -n "$wt" ]]; then
       wt_arg=(--worktree "path:$wt")
@@ -213,9 +776,11 @@ Silakan review git diff / jalankan gate approval."
                 console.log("[orca-bridge] Screenshot saved: " + process.argv[1] + " (" + b.length + " bytes)");
               } else {
                 console.error("[orca-bridge] Screenshot failed: " + (d.error?.message || "No data"));
+                process.exitCode = 1;
               }
             } catch (e) {
               console.error("[orca-bridge] Screenshot error: " + e.message);
+              process.exitCode = 1;
             }
           });
         ' "$out"
@@ -254,7 +819,7 @@ Silakan review git diff / jalankan gate approval."
     esac
     ;;
 
-  # 7. WORKTREE HELPER: Git worktree management
+  # 10. WORKTREE HELPER: Git worktree management
   worktree)
     subcmd="${2:-list}"
     case "$subcmd" in
@@ -280,28 +845,35 @@ Silakan review git diff / jalankan gate approval."
     esac
     ;;
 
-  # 8. STATUS OVERVIEW
+  # 11. STATUS OVERVIEW
   status)
-    omp_handle=$(get_handle "omp" || echo "not found")
-    agy_handle=$(get_handle "agy" || echo "not found")
-    wt=$(get_worktree_path)
+    m="not found"; a="not found"
+    if resolve_handle mandor 0 2>/dev/null; then m="$HANDLE ($HANDLE_SRC)"; fi
+    if resolve_handle tukang 0 2>/dev/null; then a="$HANDLE ($HANDLE_SRC)"; fi
+    active="-"
+    if in_git; then active="$(lib list "$(tasks_dir)" active | cut -f1,2 | tr '\t\n' ': ' || true)"; fi
     echo "=========================================================="
-    echo " 🪐 Orca Dual-Engine Multi-Agent Bridge Status"
+    echo " 🪐 Orca Dual-Engine Multi-Agent Bridge Status (v$MANDOR_VERSION)"
     echo "=========================================================="
-    echo " [PANE 1] OMP / Claude Opus 5.5  (Mandor) : $omp_handle"
-    echo " [PANE 2] Antigravity / Gemini 3.8 (Worker) : $agy_handle"
-    echo " [WORKTREE] $wt"
+    echo " [PANE 1] Mandor (OMP / Claude) : $m"
+    echo " [PANE 2] Tukang (Antigravity)  : $a"
+    echo " [WORKTREE] $(repo_root)"
+    echo " [ACTIVE TASKS] ${active:--}"
     echo "----------------------------------------------------------"
     echo " Perintah Cepat:"
-    echo " • orca-bridge delegate <title> <instruksi> (Opus -> Agy)"
-    echo " • orca-bridge report <DONE|BLOCKED> <text>  (Agy -> Opus)"
+    echo " • orca-bridge delegate --spec task.json        (Mandor -> Tukang, terstruktur)"
+    echo " • orca-bridge report DONE --task <id> <text>   (Tukang -> Mandor, auto verify)"
+    echo " • orca-bridge task approve|reject <id>         (gate Mandor)"
+    echo " • orca-bridge usage report                     (token tracker)"
+    echo " • orca-bridge pair bind <mandor|tukang> <handle>"
     echo " • orca-bridge browser <snapshot|screenshot|errors|network>"
-    echo " • orca-bridge worktree <list|create <name>>"
     echo "=========================================================="
     ;;
 
+  version|--version|-v) echo "orca-bridge $MANDOR_VERSION" ;;
+
   *)
-    echo "Usage: orca-bridge <send|read|wait|delegate|report|browser|worktree|status> [args...]"
+    echo "Usage: orca-bridge <send|read|wait|delegate|report|task|usage|pair|detect-verify|browser|worktree|status|version> [args...]"
     exit 1
     ;;
 esac
