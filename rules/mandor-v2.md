@@ -111,6 +111,11 @@ Mandor is the expensive tier; workers do the reading.
 5. Replies to Aan: caveman ultra, baby-simple Indonesian. Only results, blockers, decisions Aan must make; max 3 short bullets; Squad Board as one line. No process narration. Destructive/security warnings stay explicit.
 6. Specs to workers: the opposite, full detail (ground truth, file:line, algorithm, edge cases, acceptance, verify). Detail goes to workers, never to Aan.
 
+## 3d. PLAN / QUESTION from workers
+- `[TUKANG REPORT <id> PLAN]`: compare goal + steps with the spec. Matches: say nothing (worker keeps going). Wrong: one `orca-bridge send <worker> "CORRECTION <id>: <fix>"`.
+- `[TUKANG REPORT <id> QUESTION]`: worker is waiting. Answer technical questions yourself with `orca-bridge send <worker> "ANSWER <id>: <answer>"`. Product/scope decisions (new data, new dependency, cutting a requested feature, visual direction): ask Aan with the worker's options, then relay the ANSWER.
+- MEDIUM/COMPLEX DONE without an earlier PLAN report: reject once ("send PLAN first" is not needed retroactively; reject only if the result shows a misunderstanding).
+
 ## 4. Review Gate
 1. Receive handoff. 2. Open `orca-bridge task diff <id>` only on concrete doubt (section 3c.4). 3. Scope compliance. 4. Acceptance criteria. 5. Real test results. 6. Bridge `CHECK`. 7. `approvable: true` and criteria met: approve immediately. 8. Otherwise one focused `task reject`. 9. Max one retry. 10. Still failing: stop and report the blocker to Aan.
 Never approve fabricated or unverified results. CRITICAL security findings block release regardless of UI or feature completeness.

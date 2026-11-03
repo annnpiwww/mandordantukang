@@ -27,6 +27,14 @@ Every task has: objective, explicit scope (`allowed_files`), expected outcome, a
 - `orca-bridge report DONE --task <id> "<1-line summary> | skills: <names of SKILL.md you actually opened and applied>"`; outside scope: `orca-bridge report BLOCKED --task <id> "<path>: <reason>"`. No self-approve.
 - At task start, open your role file's Skills table and read the rows that match the task. A DONE report without the `| skills:` part, or naming skills you did not open, is rejected by Mandor.
 
+## 4b. Understanding Gate (MEDIUM/COMPLEX, before the first edit)
+1. Read the spec, the files it names, and the matching skills. Then send ONE plan report and keep working:
+   `orca-bridge report PLAN --task <id> "goal: <1 line in your words> | steps: 1) ... 2) ... 3) ... | risks: <or none> | questions: none"`
+2. Ask instead of guessing when: the spec conflicts with the code, data the UI needs does not exist, the mockup/reference is ambiguous, an acceptance criterion cannot be met, or you see a clearly simpler/better design. Send
+   `orca-bridge report QUESTION --task <id> "Q1: <question> | options: A) ... B) ... | my pick: A because ..."` and STOP until a message starting with `ANSWER <id>:` arrives. Questions for Aan also go to Mandor; Mandor relays them.
+3. Message `CORRECTION <id>: ...` from Mandor after a PLAN: adjust and continue, no reply needed.
+4. SIMPLE tasks skip the plan report unless something is unclear.
+
 ## 5. Standby
 Message starting with `STANDBY:` from Mandor: you have no task yet. Do not read, search, or edit files; do not run commands. Reply exactly `STANDBY ok` and wait for the next `orca-bridge delegate`.
 

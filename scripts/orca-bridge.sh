@@ -642,10 +642,10 @@ $details
     if [[ "${1:-}" == --task ]]; then id="${2:-}"; shift 2 || true; fi
     summary="$*"
     if [[ -z "$summary" ]]; then
-      echo "Usage: orca-bridge report <DONE|NEEDS_REVISION|BLOCKED> [--task <id>] <summary...>" >&2
+      echo "Usage: orca-bridge report <DONE|PLAN|QUESTION|NEEDS_REVISION|BLOCKED> [--task <id>] <summary...>" >&2
       exit 1
     fi
-    case "$status" in DONE|NEEDS_REVISION|BLOCKED) ;; *) die "status must be DONE|NEEDS_REVISION|BLOCKED" ;; esac
+    case "$status" in DONE|PLAN|QUESTION|NEEDS_REVISION|BLOCKED) ;; *) die "status must be DONE|PLAN|QUESTION|NEEDS_REVISION|BLOCKED" ;; esac
     if [[ -z "$id" ]] && in_git; then
       active="$(lib list "$(tasks_dir)" active | awk -F'\t' '$2=="EXECUTING"{print $1}')"
       [[ "$(grep -c . <<<"$active")" == 1 ]] && id="$active"
@@ -660,6 +660,8 @@ $details
       event "$tdir" "report $status: $summary"
       if [[ "$status" == DONE ]]; then
         check="$(task_check "$tdir" || true)"
+      elif [[ "$status" == PLAN || "$status" == QUESTION ]]; then
+        :
       else
         lib set "$tdir/state.json" blocked true
         set_state "$tdir" REVIEWING "$status"
@@ -670,6 +672,10 @@ $details
     if [[ -n "$id" ]]; then
       if [[ "$status" == DONE ]]; then
         formatted+=$'\n'"NEXT orca-bridge task approve $id | task reject $id \"<fix>\" | task diff $id"
+      elif [[ "$status" == PLAN ]]; then
+        formatted+=$'\n'"NEXT (non-blocking, worker continues) wrong plan: orca-bridge send <ui|coder|sec> \"CORRECTION $id: <fix>\""
+      elif [[ "$status" == QUESTION ]]; then
+        formatted+=$'\n'"NEXT (worker waits) orca-bridge send <ui|coder|sec> \"ANSWER $id: <answer>\"  (ask Aan first if it is his decision)"
       else
         formatted+=$'\n'"NEXT orca-bridge task amend $id --allow <file> && task resume $id | task reject $id --final"
       fi
