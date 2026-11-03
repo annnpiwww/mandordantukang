@@ -148,7 +148,8 @@ function handoff([taskFile, workdir, attempt, correction]) {
   lines.push('SPEC ' + JSON.stringify(spec));
   const role = t.target_worker && normRole(t.target_worker);
   if (role && role !== 'tukang' && role !== 'mandor') {
-    lines.push(`ROLE first task this session: read and follow ${V2_RULES}/common.md and ${V2_RULES}/${role}.md`);
+    const intro = { 'tukang-ui': 'Desain', 'tukang-coder': 'Coder', 'tukang-sec': 'Security' }[role] || role;
+    lines.push(`ROLE first message this session only: reply one line "Gw Tukang ${intro}, siap." then read and follow ${V2_RULES}/common.md and ${V2_RULES}/${role}.md`);
   }
   lines.push('RULES edit only allowed_files; no repo-wide scan; no self-approve; bridge runs verify+diff check itself.');
   lines.push(`BLOCKED orca-bridge report BLOCKED --task ${t.task_id} "<file>: <why>"`);
@@ -420,8 +421,35 @@ function list([tasksDir, which]) {
   }
 }
 
+// ---------- parallel shared-tree tasks ----------
+const isGlob = (p) => /[*?]/.test(p) || p.endsWith('/');
+const staticPrefix = (p) => (p.includes('/') ? p.split(/[*?]/)[0] : '');
+// honey: glob vs glob compares static prefixes only (lib/** vs src/** disjoint, *.dart vs anything overlaps).
+const globsClash = (p, q) => { const a = staticPrefix(p), b = staticPrefix(q); return a.startsWith(b) || b.startsWith(a); };
+// overlap <taskA> <taskB>: exit 1 + offending patterns when the allowlists can touch the same file.
+function overlap([taskA, taskB]) {
+  const a = readJson(taskA).allowed_files, b = readJson(taskB).allowed_files;
+  const hit = new Set();
+  for (const [x, y] of [[a, b], [b, a]]) {
+    for (const p of x) {
+      const clash = isGlob(p) ? y.some((q) => (isGlob(q) ? globsClash(p, q) : matchesAny(q, [p]))) : matchesAny(p, y);
+      if (clash) hit.add(p);
+    }
+  }
+  if (hit.size) { process.stdout.write([...hit].join(' ')); process.exit(1); }
+}
+// drop-peers <selfTask> <changedFile> <peerTask...>: changed files minus those owned by parallel peers.
+function dropPeers([selfTask, changedFile, ...peerTasks]) {
+  const own = readJson(selfTask).allowed_files;
+  const peer = peerTasks.flatMap((f) => readJson(f).allowed_files);
+  const sens = sensitivePatterns();
+  const keep = fs.readFileSync(changedFile, 'utf8').split('\n').filter(Boolean)
+    .filter((f) => matchesAny(f, own) || matchesAny(f, sens) || !matchesAny(f, peer));
+  process.stdout.write(keep.map((f) => f + '\n').join(''));
+}
+
 const cmds = { validate, handoff, get, set, resolve, scope, 'record-check': recordCheck, 'amend-allow': amendAllow, list,
-  'usage-omp': usageOmp, 'usage-report': usageReport, 'usage-compare': usageCompare };
+  overlap, 'drop-peers': dropPeers, 'usage-omp': usageOmp, 'usage-report': usageReport, 'usage-compare': usageCompare };
 const [cmd, ...rest] = process.argv.slice(2);
 if (!cmds[cmd]) die(`mandor-lib: unknown command '${cmd}'`);
 cmds[cmd](rest);

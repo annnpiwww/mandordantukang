@@ -245,11 +245,18 @@ task_new() {
 }
 
 send_handoff() {
-  local tdir="$1" attempt="$2" fix="${3:-}" wt="" msg target_worker
+  local tdir="$1" attempt="$2" fix="${3:-}" wt="" msg target_worker refs
   wt="$(lib get "$tdir/state.json" isolate_dir 2>/dev/null || true)"
   msg="$(lib handoff "$tdir/task.json" "$wt" "$attempt" "$fix")"
   target_worker="$(lib get "$tdir/task.json" target_worker 2>/dev/null || echo tukang)"
   [[ -z "$target_worker" || "$target_worker" == "null" ]] && target_worker="tukang"
+  # Per-role project references (read-only): docs/{design,coder,security}_references/ when the repo has them.
+  case "$(role_of "$target_worker" 2>/dev/null)" in
+    tukang-ui) refs="docs/design_references" ;; tukang-coder) refs="docs/coder_references" ;; tukang-sec) refs="docs/security_references" ;; *) refs="" ;;
+  esac
+  if [[ -n "$refs" && -d "$(lib get "$tdir/state.json" root)/$refs" ]]; then
+    msg+=$'\n'"REFS $refs/ read-only, never edit: README.md first, then only the guideline sections and images relevant to this task."
+  fi
   target_handle "$target_worker"
   deliver "$target_worker" "$HANDLE" "$msg"
   lib set "$tdir/state.json" tukang_handle "$HANDLE" mandor_handle "$SELF_HANDLE" target_worker "$target_worker"
@@ -272,8 +279,15 @@ task_assign() {
   base="$(git -C "$root" rev-parse --verify -q HEAD)" || die "repository has no commits; commit once before delegating"
   iso="$(lib get "$tdir/task.json" isolate)"
   if [[ "$iso" != true ]]; then
-    local others; others="$(lib list "$(tasks_dir)" shared | cut -f1 | grep -vx "$id" || true)"
-    [[ -z "$others" ]] || die "shared-tree task(s) already active: $others. Diffs would mix; finish them or use \"isolate\": true."
+    # Parallel shared-tree tasks are allowed only with disjoint allowlists; each records the other as a peer.
+    local o conflict
+    : > "$tdir/peers.txt"
+    while IFS= read -r o; do
+      [[ -z "$o" || "$o" == "$id" ]] && continue
+      conflict="$(lib overlap "$tdir/task.json" "$(task_dir "$o")/task.json")" \
+        || die "shared-tree task $o has overlapping allowed_files ($conflict). Wait for it, use literal disjoint paths, or \"isolate\": true."
+      echo "$o" >> "$tdir/peers.txt"; echo "$id" >> "$(task_dir "$o")/peers.txt"
+    done < <(lib list "$(tasks_dir)" shared | cut -f1)
   fi
   snapshot_baseline "$root" "$tdir"
   lib set "$tdir/state.json" base "$base"
@@ -295,6 +309,17 @@ task_assign() {
   log "task $id -> Tukang ($(lib get "$tdir/state.json" tukang_handle)). Waiting for: orca-bridge report DONE --task $id"
 }
 
+# drop_peer_files <tdir> <out>: remove files owned by parallel peer tasks (active or already closed).
+drop_peer_files() {
+  local tdir="$1" out="$2" p f peers=()
+  [[ -s "$tdir/peers.txt" ]] || return 0
+  while IFS= read -r p; do
+    [[ -n "$p" && -f "$(tasks_dir)/$p/task.json" ]] && peers+=("$(tasks_dir)/$p/task.json")
+  done < <(sort -u "$tdir/peers.txt")
+  ((${#peers[@]})) || return 0
+  f="$(tmpf)"; lib drop-peers "$tdir/task.json" "$out" "${peers[@]}" > "$f"; mv "$f" "$out"
+}
+
 # collect_changed <tdir> <out> <main_out>: sorted task change set. Isolated tasks: worktree diff plus
 # secret files touched in the main tree; main-tree edits go to <main_out> (may be Mandor's own work).
 collect_changed() {
@@ -309,6 +334,7 @@ collect_changed() {
     { changed_iso "$wt" "$base"; cat "$sec"; } | sort -u > "$out"
   else
     changed_shared "$root" "$tdir" "$base" | sort -u > "$out"
+    drop_peer_files "$tdir" "$out"
   fi
 }
 
@@ -566,13 +592,15 @@ case "$command" in
       worker="$(role_of "${2:-}")" || die "unknown worker role '${2:-}'. Use ui|coder|sec|tukang"
       shift 2 || true
     fi
+    pre_force=()
+    if [[ "${1:-}" == --force && "${2:-}" == --spec ]]; then pre_force=(--force); shift; fi
     if [[ "${1:-}" == --spec ]]; then
       spec="${2:-}"; shift 2 || true
       id="$(task_new "$spec")"
       if [[ "$worker" != "tukang" ]]; then
         lib set "$(task_dir "$id")/task.json" target_worker "$worker"
       fi
-      task_assign "$id" "$@"
+      task_assign "$id" "$@" "${pre_force[@]}"
       exit 0
     fi
     force=0

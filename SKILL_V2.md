@@ -10,7 +10,7 @@ Sistem orkestrasi multi-agent tingkat lanjut untuk AI coding di Orca IDE. Mandor
 ## 👥 Roster & Spesialisasi Squad (4 Terminal Orca)
 
 1. **Mandor (Pane 1 / Tier Pintar & Mahal)**: Claude Opus 5.5 / Sonnet via `omp`.
-   - **Peran**: Lead Architect, System Planner, Review Gate, Quick-Fixer (≤ 15 baris).
+   - **Peran**: Lead Architect, System Planner, Review Gate. NOL EKSEKUSI: tidak edit kode, tidak build, tidak operasi DB; semua kerja (termasuk SIMPLE via `--force`) didelegasikan.
    - **Bilingual Protocol**:
      - **Ke Tukang**: Spesifikasi teknis wajib **Bahasa Inggris (English)** untuk memangkas konsumsi token hingga 30–40% (Ponytail Lever 3).
      - **Ke User (Aan)**: Output **Bahasa Indonesia gaul Gen-Z ultra-ringkas (Caveman Ultra)**, maks 3-4 bullet points (< 50 kata).
@@ -120,6 +120,13 @@ Jika butuh koreksi:
 ```bash
 orca-bridge task reject <id> "<targeted 1-line English correction>"
 ```
+
+### 5. Squad Board & Standby
+Tiap delegasi/antrean, Mandor menampilkan status semua Tukang ke Aan: `BEKERJA` (task id), `STANDBY` (nunggu apa + tugas berikutnya), atau `TIDAK DIPAKAI` (alasan). Pane yang STANDBY dikirimi:
+```bash
+orca-bridge send ui "STANDBY: waiting for <task id>. Next for you: <job>. Do not read or edit files. Reply exactly: STANDBY ok"
+```
+Detail: `rules/mandor-v2.md` bagian 3b, perilaku worker: `rules/common.md` bagian 5.
 
 ---
 

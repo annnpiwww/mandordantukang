@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased
+### Added
+- Shared-tree tasks run in parallel when `allowed_files` are disjoint (`lib overlap`); overlap is refused with the offending paths. Peer-owned files are never blamed on a task, even after the peer is approved (`peers.txt` + `lib drop-peers`).
+- Rules v2: Squad Board + `STANDBY:` protocol, contract file `docs/contracts/<feature>.md`, Mandor token budget, worker navigation/token discipline (rtk, xerj, Serena, semantex, targeted reads), one-time session intro (`Gw Tukang Desain/Coder/Security, siap.`) via the handoff `ROLE` line.
+- Handoff auto-appends `REFS docs/<design|coder|security>_references/` (read-only) for ui/coder/sec when the repo has that folder.
+- Role boundary (`common.md` 5b): each worker refuses out-of-role work, even direct requests from Aan; Mandor is zero-execution (plan, review, push back only).
+- Skill stacks per role from high-star repos: `jakubkrehel/skills` (better-ui/layout/typography/colors/accessibility/writing, interface-review, build-design, state-machine, variant, break), `flutter/skills` (responsive layout, layout fixes, widget preview/tests, architecture, http), `deanpeters/Product-Manager-Skills` (PRD, user story, JTBD, journey map, prioritisation), `trailofbits/skills` (differential-review, sharp-edges, variant-analysis, firebase-apk-scanner, supply-chain, mutation/property testing), `mattpocock/skills` (tdd, diagnosing-bugs, domain-modeling, to-spec, grill-me), `vercel-labs/web-interface-guidelines`.
+- New Mandor skill `mandor-prototype-spec` (data mapping table, ASCII wireframe, tokens, component/interaction tables, Given/When/Then) mandatory before any UI delegation.
+- `scripts/install-skills.sh`: clones the source repos and installs the same skill set into `~/.agents/skills` (keeps existing skills; clashes go to `ext-<name>`).
+- Coder release duty: foreground build, aapt version + sha256 proof before sending APKs.
+
 ## 0.3.0 — 2026-11-03
 ### Added
 - Multi-Agent Squad Orchestration (v2): launcher `orca-squad` untuk 1 Mandor (`omp`) + 3 Tukang Spesialis (`agy`: UI/UX, Coder, Security).

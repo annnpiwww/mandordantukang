@@ -97,11 +97,14 @@ t_routing_squad_workers() {
   yes "bind Security worker" mandor pair bind sec term_sec
   yes "delegate to UI worker" mandor delegate --to ui "Fix CSS" '- Allowed Files: [style.css]\n- Verify Command: ./check.sh'
   has "UI worker got delegation" "style.css" "$(sent_to term_ui)"
+  mkdir -p "$REPO/docs/security_references"
   local id; id="$(mandor task new "$(spec '{"target_worker":"sec"}')")"
   yes "assign to sec worker" mandor task assign "$id"
   has "Security worker got task" "$id" "$(sent_to term_sec)"
   has "sec handoff points at its role rules" "mandortukangv2/rules/tukang-sec.md" "$(sent_to term_sec)"
   hasnt "sec handoff does not load ui rules" "tukang-ui.md" "$(sent_to term_sec)"
+  has "sec handoff lists its reference folder" "REFS docs/security_references/" "$(sent_to term_sec)"
+  hasnt "ui handoff has no refs when folder missing" "REFS" "$(sent_to term_ui)"
 }
 t_wait_and_send_failures() {
   export FAKE_ORCA_WAIT_RC=1
@@ -260,7 +263,12 @@ t_simple_task_not_delegated() {
 t_concurrent_shared_tasks() {
   local a b; a="$(new_task)"; b="$(new_task '{"allowed_files":["src/b.js"]}')"
   mandor task assign "$a" >/dev/null
-  has "second shared task refused (diffs would mix)" "already active" "$(mandor task assign "$b" 2>&1)"
+  yes "disjoint shared task runs in parallel" mandor task assign "$b"
+  has "overlapping shared task refused" "overlapping allowed_files" "$(mandor task assign "$(new_task)" 2>&1)"
+  printf 'module.exports = 17;\n' > "$REPO/src/a.js"; printf 'module.exports = 8;\n' > "$REPO/src/b.js"
+  has "peer's file not blamed on task a" '"changed":["src/a.js"]' "$(mandor task check "$a" 2>&1)"
+  yes "approve a" mandor task approve "$a"
+  has "closed peer's file still not blamed on task b" '"changed":["src/b.js"]' "$(mandor task check "$b" 2>&1)"
   yes "isolated task may run concurrently" mandor task assign "$(new_task '{"isolate":true,"allowed_files":["src/b.js"]}')"
 }
 t_isolated_task() {
