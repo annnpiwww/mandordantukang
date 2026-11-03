@@ -409,6 +409,16 @@ t_install_upgrade_from_v01() {
   has "edited file kept" "mine" "$(cat "$sk/GEMINI.md")"
 }
 
+# ---------------- docs ----------------
+# Every skills/<name>.md the agents are told to read must exist (rules/mandor.md is copied into global RULES.md).
+t_skill_refs_resolve() {
+  local refs r missing=""
+  refs="$(cd "$ROOT" && grep -ohE 'skills/[a-z0-9-]+\.md' AGENTS.md CLAUDE.md GEMINI.md SKILL.md README.md rules/*.md skills/*.md | sort -u)"
+  [[ -n "$refs" ]] || { bad "no skill references found"; return; }
+  for r in $refs; do [[ -f "$ROOT/$r" ]] || missing+=" $r"; done
+  [[ -z "$missing" ]] && ok "all skill references resolve" || bad "missing skill files:$missing"
+}
+
 TESTS=(t_routing_title_match t_routing_no_arbitrary_fallback t_routing_ambiguous t_routing_other_worktree_ignored
   t_routing_self_send_refused t_routing_layout_fallback t_wait_and_send_failures t_legacy_delegate_contract
   t_spec_validation t_verify_detection t_happy_path_shared t_report_autodetects_single_active_task
@@ -416,7 +426,8 @@ TESTS=(t_routing_title_match t_routing_no_arbitrary_fallback t_routing_ambiguous
   t_change_after_verify t_baseline_dirty_files t_secret_file_detection t_reject_retry_limit
   t_simple_task_not_delegated t_concurrent_shared_tasks t_isolated_task t_isolated_reject_never_lands
   t_recovery_after_send_failure t_blocked_amend_resume t_lock_stale_and_busy t_usage_tracking t_single_mode
-  t_orca_pair_binds_spawned_terminals t_install_lifecycle t_install_rollback t_install_global_rules t_install_upgrade_from_v01)
+  t_orca_pair_binds_spawned_terminals t_install_lifecycle t_install_rollback t_install_global_rules t_install_upgrade_from_v01
+  t_skill_refs_resolve)
 for t in "${TESTS[@]}"; do run "$t"; done
 
 echo

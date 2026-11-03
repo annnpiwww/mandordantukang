@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.3.0 — 2026-11-03
+### Added
+- On-demand Mandor skills: `skills/principal-workflow.md` (DISCOVER sampai LEARN, routing per kelas, planning arsitektur), `skills/product-intelligence.md`, `skills/uiux-intelligence.md`. Hasil planning dipetakan langsung ke field spec yang sudah ada; kontrak bridge tidak berubah.
+- Test `t_skill_refs_resolve`: setiap referensi `skills/*.md` di dokumen menunjuk ke file yang ada.
+
+### Changed
+- `rules/mandor.md`, `CLAUDE.md`, `SKILL.md`: Mandor wajib memahami masalah asli dan membantah usulan user yang lemah (risiko + bukti + alternatif); routing ke skill on-demand. SIMPLE tidak memuat apa pun.
+
+### Limitations
+- Skill baru berupa instruksi prompt, tidak di-enforce bridge. Dampak ke kualitas dan token belum dibenchmark.
+
 ## 0.2.0 — 2026-11-02
 ### Added
 - Structured handoff: `orca-bridge delegate --spec <file|->` / `task new` with JSON schema validation (`task_id`, `task_type`, `objective`, `allowed_files`, `required_changes`, `acceptance_criteria`, `verification_command`, `constraints`, `expected_report`, optional `isolate`, `max_retries`, `verify_timeout`, `allow_sensitive`, `mode`, `scenario`, `tukang_model`).

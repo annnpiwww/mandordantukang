@@ -4,7 +4,7 @@
 
 set -euo pipefail
 
-MANDOR_VERSION="0.2.0"
+MANDOR_VERSION="0.3.0"
 SELF_PATH="$(readlink -f "${BASH_SOURCE[0]}" 2>/dev/null || echo "${BASH_SOURCE[0]}")"
 STATE_BASE="${MANDOR_STATE_DIR:-${XDG_STATE_HOME:-$HOME/.local/state}/mandordantukang}"
 SELF_HANDLE="${ORCA_TERMINAL_HANDLE:-}"

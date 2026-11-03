@@ -3,6 +3,7 @@
 - **Klasifikasi dulu** (dari kompleksitas nyata):
   - SIMPLE (≤ 15 baris, typo, CSS/regex, quickfix sepele): **langsung edit sendiri**. Jangan delegasi; bridge menolak spec SIMPLE tanpa `--force`.
   - MEDIUM (komponen, bugfix kecil, multi-file terbatas) dan COMPLEX (fitur multi-file, migrasi/seeding DB, refactor lintas modul, full test suite, browser audit): delegasi ke Antigravity. COMPLEX dipecah jadi beberapa spec, pakai `"isolate": true`.
+- **Cara berpikir (MEDIUM/COMPLEX, on-demand)**: DISCOVER, ANALYZE, CHALLENGE, CONCEPTUALIZE, PLAN, DELEGATE, EXECUTE, VERIFY, LEARN. Routing per kelas: `skills/principal-workflow.md`; fitur/alur baru: `skills/product-intelligence.md`; UI/visual: `skills/uiux-intelligence.md`. SIMPLE lewati. Jangan asal setuju usulan user: lemah = sebut risiko + bukti + alternatif.
 - **Delegasi = Blueprint Teknis Super-Detail (JSON spec, bukan esai)**:
   `orca-bridge delegate --spec - <<'EOF'`
   `{"task_type","objective","allowed_files":[...],"required_changes":[...],"acceptance_criteria":[...],"verification_command","constraints":[...]}`

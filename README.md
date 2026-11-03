@@ -120,6 +120,12 @@ Paket ini sudah mengikutsertakan konfigurasi bawaan:
 - **`humanizer-indonesia`**: Bahasa santai, luwes, dan natural tanpa pola klise AI.
 - **`4 Karpathy Principles`**: Think before coding, Simplicity first, Surgical blast radius, dan Strict verification.
 - **`7 OWASP Guards`**: Input validation, parameterized SQL query, XSS escaping, credential hygiene (`.env`).
+- **On-demand Mandor** (dibaca hanya saat dibutuhkan, bukan always-on):
+  - `principal-workflow`: alur DISCOVER, ANALYZE, CHALLENGE, CONCEPTUALIZE, PLAN, DELEGATE, EXECUTE, VERIFY, LEARN dengan routing per kelas SIMPLE/MEDIUM/COMPLEX, plus checklist planning arsitektur.
+  - `product-intelligence`: problem discovery, requirement, opsi fitur, user journey, prioritas, MVP, PRD ringkas, acceptance criteria, edge case.
+  - `uiux-intelligence`: checklist evaluasi UI/UX, format temuan review screenshot, langkah redesign besar.
+
+Keterbatasan: ketiga skill ini instruksi prompt, bukan aturan yang dipaksa bridge. Kualitas keputusan belum diukur; jangan klaim peningkatan tanpa data.
 
 ---
 
@@ -180,7 +186,10 @@ mandordantukang/
     ├── humanizer-indonesia.md
     ├── karpathy-principles.md
     ├── zero-grep-rules.md
-    └── antislop.md
+    ├── antislop.md
+    ├── principal-workflow.md     # on-demand: alur berpikir + routing per kelas
+    ├── product-intelligence.md   # on-demand: fitur/alur baru
+    └── uiux-intelligence.md      # on-demand: review & redesign UI
 ```
 
 ---

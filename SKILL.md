@@ -7,7 +7,8 @@ description: "Dual-Engine Multi-Agent Architecture for AI Pair Programming: Expe
 
 Sistem arsitektur kolaborasi multi-agent untuk AI coding yang memecah peran menjadi 2 tier model. Target: total token per task yang berhasil serendah mungkin tanpa menurunkan kualitas arsitektur. Penghematan belum dibenchmark; ukur sendiri pakai `orca-bridge usage compare` (lihat `bench/README.md`), jangan pakai angka persen tanpa data.
 1. **Mandor (Pane 1 / Tier Pintar & Mahal)**: Claude Opus 5.5 / Sonnet / GPT-4o.
-   - Peran: Arsitek, Strategist, System Planner, Review Gate, Quick-Fixer (≤ 15 baris).
+   - Peran: Arsitek, Strategist, Product & UI/UX Reviewer, System Planner, Review Gate, Quick-Fixer (≤ 15 baris).
+   - Metodologi on-demand: `skills/principal-workflow.md`, `skills/product-intelligence.md`, `skills/uiux-intelligence.md`.
    - Menjaga batas allowlist dan memegang verifikasi akhir.
 2. **Tukang Kerja (Pane 2 / Tier Cepat & Murah)**: Gemini 3.8 Flash High / 2.5 Flash / Haiku.
    - Peran: Heavy Hands-on Executor. Koding multi-file, migrasi database, test runner (Verify Command dari Mandor), dan visual browser audit.
