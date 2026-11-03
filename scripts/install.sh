@@ -73,7 +73,7 @@ released_blob() {
 
 # ---------- uninstall ----------
 if [[ "$mode" == uninstall ]]; then
-  for b in orca-bridge orca-pair; do
+  for b in orca-bridge orca-pair orca-squad; do
     dest="$INSTALL_BIN_DIR/$b"
     if [[ -f "$dest" && ! -L "$dest" ]] && grep -q "$MARKER" "$dest"; then
       rm -f "$dest"; say "removed $dest"
@@ -107,8 +107,9 @@ STAGE="$(mktemp -d)"
 trap 'rm -rf "$STAGE"' EXIT
 cp "$SCRIPT_DIR/orca-bridge.sh" "$STAGE/orca-bridge"
 cp "$SCRIPT_DIR/orca-pair.sh" "$STAGE/orca-pair"
+cp "$SCRIPT_DIR/orca-squad.sh" "$STAGE/orca-squad"
 cp "$SCRIPT_DIR/mandor-lib.js" "$STAGE/mandor-lib.js"
-bash -n "$STAGE/orca-bridge" && bash -n "$STAGE/orca-pair" && node --check "$STAGE/mandor-lib.js" \
+bash -n "$STAGE/orca-bridge" && bash -n "$STAGE/orca-pair" && bash -n "$STAGE/orca-squad" && node --check "$STAGE/mandor-lib.js" \
   || { echo "❌ staged files failed syntax check; nothing installed" >&2; exit 1; }
 
 # ---------- transactional install with rollback ----------
@@ -143,7 +144,8 @@ mkdir -p "$INSTALL_BIN_DIR" "$SHARE_DIR"
 say "installing tools to $INSTALL_BIN_DIR..."
 place "$STAGE/orca-bridge" "$INSTALL_BIN_DIR/orca-bridge" bin/orca-bridge
 place "$STAGE/orca-pair" "$INSTALL_BIN_DIR/orca-pair" bin/orca-pair
-chmod +x "$INSTALL_BIN_DIR/orca-bridge" "$INSTALL_BIN_DIR/orca-pair"
+place "$STAGE/orca-squad" "$INSTALL_BIN_DIR/orca-squad" bin/orca-squad
+chmod +x "$INSTALL_BIN_DIR/orca-bridge" "$INSTALL_BIN_DIR/orca-pair" "$INSTALL_BIN_DIR/orca-squad"
 place "$STAGE/mandor-lib.js" "$SHARE_DIR/mandor-lib.js" share/mandor-lib.js
 
 # Skill files: overwrite only files we installed and the user has not edited since (manifest),

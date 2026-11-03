@@ -60,7 +60,7 @@ const strArr = (v) => Array.isArray(v) && v.every((x) => typeof x === 'string' &
 // ---------- validate ----------
 const SPEC_KEYS = new Set(['task_id', 'task_type', 'objective', 'allowed_files', 'required_changes',
   'acceptance_criteria', 'verification_command', 'constraints', 'expected_report', 'isolate', 'max_retries',
-  'verify_timeout', 'allow_sensitive', 'tukang_model', 'mode', 'scenario']);
+  'verify_timeout', 'allow_sensitive', 'tukang_model', 'mode', 'scenario', 'target_worker', 'worker']);
 
 function validate([inFile, outFile, taskId, detectedVerify]) {
   let spec;
@@ -83,7 +83,7 @@ function validate([inFile, outFile, taskId, detectedVerify]) {
   if (spec.max_retries !== undefined && !(Number.isInteger(spec.max_retries) && spec.max_retries >= 0 && spec.max_retries <= 5)) errs.push('max_retries: integer 0..5');
   if (spec.verify_timeout !== undefined && !(Number.isInteger(spec.verify_timeout) && spec.verify_timeout > 0 && spec.verify_timeout <= 7200)) errs.push('verify_timeout: integer seconds 1..7200');
   if (spec.mode !== undefined && !['pair', 'single'].includes(spec.mode)) errs.push("mode: 'pair'|'single'");
-  for (const k of ['tukang_model', 'scenario']) if (spec[k] !== undefined && typeof spec[k] !== 'string') errs.push(`${k}: string`);
+  for (const k of ['tukang_model', 'scenario', 'target_worker', 'worker']) if (spec[k] !== undefined && typeof spec[k] !== 'string') errs.push(`${k}: string`);
 
   let verify = spec.verification_command;
   let verifySource = 'mandor';
@@ -125,6 +125,8 @@ function validate([inFile, outFile, taskId, detectedVerify]) {
   };
   if (spec.tukang_model) task.tukang_model = spec.tukang_model;
   if (spec.scenario) task.scenario = spec.scenario;
+  const tw = spec.target_worker || spec.worker;
+  if (tw) task.target_worker = String(tw).toLowerCase();
   writeJsonAtomic(outFile, task);
   for (const w of warns) process.stderr.write(`warn: ${w}\n`);
 }
@@ -136,7 +138,8 @@ function handoff([taskFile, workdir, attempt, correction]) {
     objective: t.objective, allowed_files: t.allowed_files, required_changes: t.required_changes,
     acceptance_criteria: t.acceptance_criteria, constraints: t.constraints, report: t.expected_report,
   };
-  const lines = [`[MANDOR TASK ${t.task_id} | ${t.task_type}${Number(attempt) > 0 ? ` | RETRY ${attempt}` : ''}]`];
+  const targetTag = t.target_worker ? ` | TARGET: ${t.target_worker.toUpperCase()}` : '';
+  const lines = [`[MANDOR TASK ${t.task_id} | ${t.task_type}${targetTag}${Number(attempt) > 0 ? ` | RETRY ${attempt}` : ''}]`];
   if (workdir) lines.push(`WORKDIR ${workdir}  (edit files HERE only)`);
   if (correction) lines.push(`FIX ${correction}`);
   lines.push('SPEC ' + JSON.stringify(spec));
@@ -170,6 +173,16 @@ function set([file, ...pairs]) {
 const ROLE_RE = {
   mandor: /(^|[^a-z])(omp|claude|opus|mandor)([^a-z]|$)|(^|[\s:⠀-⣿])pi(\s|$)/i,
   tukang: /antigravity|(^|[\s:])agy(\s|$)|gemini|tukang/i,
+  'tukang-ui': /(^|[^a-z])(ui|ux|design|frontend)([^a-z]|$)/i,
+  'tukang-coder': /(^|[^a-z])(coder|logic|backend|core)([^a-z]|$)/i,
+  'tukang-sec': /(^|[^a-z])(sec|security|qa|tester|audit)([^a-z]|$)/i,
+};
+const normRole = (r) => {
+  if (['ui', 'tukang-ui', 'frontend'].includes(r)) return 'tukang-ui';
+  if (['coder', 'tukang-coder', 'logic', 'backend'].includes(r)) return 'tukang-coder';
+  if (['sec', 'security', 'tukang-sec', 'qa', 'tester'].includes(r)) return 'tukang-sec';
+  if (['omp', 'claude', 'opus', 'mandor'].includes(r)) return 'mandor';
+  return 'tukang';
 };
 function resolve([role, termsFile, worktree, self, pairFile]) {
   const data = readJson(termsFile);
@@ -178,14 +191,17 @@ function resolve([role, termsFile, worktree, self, pairFile]) {
   const usable = (t) => t.connected !== false && t.orphaned !== true;
   const out = (h, src) => { process.stdout.write(`${h}\t${src}`); process.exit(0); };
 
-  const envHandle = process.env[role === 'mandor' ? 'MANDOR_HANDLE' : 'TUKANG_HANDLE'];
+  const nRole = normRole(role);
+  const envKey = nRole === 'mandor' ? 'MANDOR_HANDLE' : nRole === 'tukang-ui' ? 'TUKANG_UI_HANDLE' : nRole === 'tukang-coder' ? 'TUKANG_CODER_HANDLE' : nRole === 'tukang-sec' ? 'TUKANG_SEC_HANDLE' : 'TUKANG_HANDLE';
+  const envHandle = process.env[envKey] || (nRole.startsWith('tukang-') ? process.env.TUKANG_HANDLE : undefined);
   if (envHandle) {
     const t = terms.find((x) => x.handle === envHandle);
     if (!t || !usable(t)) die(`${role}: env handle ${envHandle} not live`, 2);
     out(envHandle, 'env');
   }
   if (pairFile && fs.existsSync(pairFile)) {
-    const h = readJson(pairFile)[role];
+    const pairData = readJson(pairFile);
+    const h = pairData[nRole] || pairData[role] || (nRole.startsWith('tukang-') ? pairData.tukang : null);
     if (h) {
       const t = terms.find((x) => x.handle === h);
       if (t && usable(t) && inTree(t)) out(h, 'pair');
@@ -193,11 +209,16 @@ function resolve([role, termsFile, worktree, self, pairFile]) {
     }
   }
   const pool = terms.filter((t) => inTree(t) && usable(t) && t.handle !== self);
-  const hits = pool.filter((t) => ROLE_RE[role].test(t.title || ''));
+  const re = ROLE_RE[nRole] || ROLE_RE[role] || ROLE_RE.tukang;
+  const hits = pool.filter((t) => re.test(t.title || ''));
   if (hits.length === 1) out(hits[0].handle, 'title');
+  if (hits.length === 0 && nRole.startsWith('tukang-')) {
+    const defaultHits = pool.filter((t) => ROLE_RE.tukang.test(t.title || ''));
+    if (defaultHits.length === 1) out(defaultHits[0].handle, 'title-fallback');
+  }
   // Layout fallback: Orca's 2-pane split (left=mandor, right=tukang), only if it names exactly one live pane.
   const vl = (data.result?.visualLayouts || []).find((v) => v.worktreePath && inTree({ worktreePath: v.worktreePath }));
-  const side = vl?.root?.type === 'split' ? vl.root[role === 'mandor' ? 'first' : 'second'] : null;
+  const side = vl?.root?.type === 'split' ? vl.root[nRole === 'mandor' ? 'first' : 'second'] : null;
   const tabs = side?.tabs || [];
   const tab = tabs.find((x) => x.tabId === side?.activeTabId) || (tabs.length === 1 ? tabs[0] : null);
   const leaf = tab?.panes?.type === 'terminal' ? tab.panes.handle : null;

@@ -90,6 +90,17 @@ t_routing_layout_fallback() {
     "[{\"worktreePath\":\"$REPO\",\"root\":{\"type\":\"split\",\"first\":{\"activeTabId\":\"a\",\"tabs\":[{\"tabId\":\"a\",\"panes\":{\"type\":\"terminal\",\"handle\":\"term_1\"}}]},\"second\":{\"activeTabId\":\"b\",\"tabs\":[{\"tabId\":\"b\",\"panes\":{\"type\":\"terminal\",\"handle\":\"term_2\"}}]}}}]"
   has "right split pane = tukang (layout)" "term_2 (layout)" "$(mandor status)"
 }
+t_routing_squad_workers() {
+  terms "$REPO" '[{"handle":"term_m","title":"OMP Mandor"},{"handle":"term_ui","title":"AGY UI Specialist"},{"handle":"term_cd","title":"AGY Coder Specialist"},{"handle":"term_sec","title":"AGY Security Specialist"}]'
+  yes "bind UI worker" mandor pair bind ui term_ui
+  yes "bind Coder worker" mandor pair bind coder term_cd
+  yes "bind Security worker" mandor pair bind sec term_sec
+  yes "delegate to UI worker" mandor delegate --to ui "Fix CSS" '- Allowed Files: [style.css]\n- Verify Command: ./check.sh'
+  has "UI worker got delegation" "style.css" "$(sent_to term_ui)"
+  local id; id="$(mandor task new "$(spec '{"target_worker":"sec"}')")"
+  yes "assign to sec worker" mandor task assign "$id"
+  has "Security worker got task" "$id" "$(sent_to term_sec)"
+}
 t_wait_and_send_failures() {
   export FAKE_ORCA_WAIT_RC=1
   no "wait timeout exits non-zero" mandor wait agy 10
@@ -420,7 +431,7 @@ t_skill_refs_resolve() {
 }
 
 TESTS=(t_routing_title_match t_routing_no_arbitrary_fallback t_routing_ambiguous t_routing_other_worktree_ignored
-  t_routing_self_send_refused t_routing_layout_fallback t_wait_and_send_failures t_legacy_delegate_contract
+  t_routing_self_send_refused t_routing_layout_fallback t_routing_squad_workers t_wait_and_send_failures t_legacy_delegate_contract
   t_spec_validation t_verify_detection t_happy_path_shared t_report_autodetects_single_active_task
   t_report_from_wrong_terminal t_scope_violation_and_revert t_verify_failure_blocks_approval t_verify_timeout
   t_change_after_verify t_baseline_dirty_files t_secret_file_detection t_reject_retry_limit

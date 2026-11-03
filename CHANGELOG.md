@@ -2,8 +2,13 @@
 
 ## 0.3.0 — 2026-11-03
 ### Added
+- Multi-Agent Squad Orchestration (v2): launcher `orca-squad` untuk 1 Mandor (`omp`) + 3 Tukang Spesialis (`agy`: UI/UX, Coder, Security).
+- Targeted worker routing di `orca-bridge`: `delegate --to <ui|coder|sec>`, `pair bind <role> <handle>`, dan support `target_worker` di JSON spec.
+- Aturan spesialis Tukang: `rules/tukang-ui.md` (UI/UX & micro-motion), `rules/tukang-coder.md` (logic & minimal diff), `rules/tukang-sec.md` (7 OWASP guards & QA).
+- Bilingual Token Optimization Protocol (Ponytail Lever 3): spec Mandor $\rightarrow$ Tukang wajib English (~30–40% token saving); output Mandor $\rightarrow$ User tetap Indo Gaul Caveman Ultra.
+- Dedicated skill definition `mandortukangv2` (`SKILL_V2.md`).
 - On-demand Mandor skills: `skills/principal-workflow.md` (DISCOVER sampai LEARN, routing per kelas, planning arsitektur), `skills/product-intelligence.md`, `skills/uiux-intelligence.md`. Hasil planning dipetakan langsung ke field spec yang sudah ada; kontrak bridge tidak berubah.
-- Test `t_skill_refs_resolve`: setiap referensi `skills/*.md` di dokumen menunjuk ke file yang ada.
+- Test `t_routing_squad_workers` dan `t_skill_refs_resolve`: verifikasi binding multi-worker dan integritas referensi file.
 
 ### Changed
 - `rules/mandor.md`, `CLAUDE.md`, `SKILL.md`: Mandor wajib memahami masalah asli dan membantah usulan user yang lemah (risiko + bukti + alternatif); routing ke skill on-demand. SIMPLE tidak memuat apa pun.

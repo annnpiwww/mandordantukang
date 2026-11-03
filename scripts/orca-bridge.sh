@@ -36,6 +36,9 @@ role_of() {
   case "$1" in
     omp|claude|otak|mandor) echo mandor ;;
     agy|antigravity|gemini|worker|tukang) echo tukang ;;
+    ui|tukang-ui|frontend) echo tukang-ui ;;
+    coder|tukang-coder|logic|backend) echo tukang-coder ;;
+    sec|security|tukang-sec|qa|tester) echo tukang-sec ;;
     *) return 1 ;;
   esac
 }
@@ -112,7 +115,7 @@ resolve_handle() {
   HANDLE="${out%%$'\t'*}"; HANDLE_SRC="${out#*$'\t'}"
 }
 target_handle() {
-  local role; role="$(role_of "$1")" || die "unknown target '$1'. Use omp|agy (mandor|tukang)."
+  local role; role="$(role_of "$1")" || die "unknown target '$1'. Use omp|agy (mandor|tukang|ui|coder|sec)."
   resolve_handle "$role" || exit 1
   [[ -n "$SELF_HANDLE" && "$HANDLE" == "$SELF_HANDLE" ]] && die "$role resolves to this terminal ($HANDLE); refusing self-send. Fix: orca-bridge pair bind $role <handle>"
   return 0
@@ -120,7 +123,7 @@ target_handle() {
 # deliver <role> <handle> <text>: send + Enter; tukang (agy TUI) also gets the Alt+M queue flush.
 deliver() {
   orca terminal send --terminal "$2" --text "$3" --enter --json >/dev/null 2>&1 || die "send to $1 ($2) failed"
-  if [[ "$1" == tukang ]]; then
+  if [[ "$1" == tukang* ]]; then
     sleep 0.15
     orca terminal send --terminal "$2" --text "$(printf '\033m')" --json >/dev/null 2>&1 || true
   fi
@@ -242,14 +245,16 @@ task_new() {
 }
 
 send_handoff() {
-  local tdir="$1" attempt="$2" fix="${3:-}" wt="" msg
+  local tdir="$1" attempt="$2" fix="${3:-}" wt="" msg target_worker
   wt="$(lib get "$tdir/state.json" isolate_dir 2>/dev/null || true)"
   msg="$(lib handoff "$tdir/task.json" "$wt" "$attempt" "$fix")"
-  target_handle tukang
-  deliver tukang "$HANDLE" "$msg"
-  lib set "$tdir/state.json" tukang_handle "$HANDLE" mandor_handle "$SELF_HANDLE"
+  target_worker="$(lib get "$tdir/task.json" target_worker 2>/dev/null || echo tukang)"
+  [[ -z "$target_worker" || "$target_worker" == "null" ]] && target_worker="tukang"
+  target_handle "$target_worker"
+  deliver "$target_worker" "$HANDLE" "$msg"
+  lib set "$tdir/state.json" tukang_handle "$HANDLE" mandor_handle "$SELF_HANDLE" target_worker "$target_worker"
   printf '{"ts":%s,"role":"tukang","kind":"handoff","source":"estimated","input":%s}\n' "$(now_ms)" $(( (${#msg} + 3) / 4 )) >> "$tdir/usage.jsonl"
-  event "$tdir" "handoff sent to $HANDLE ($HANDLE_SRC), ${#msg} chars"
+  event "$tdir" "handoff sent to $HANDLE ($HANDLE_SRC, $target_worker), ${#msg} chars"
 }
 
 task_assign() {
@@ -556,9 +561,17 @@ case "$command" in
   #    Legacy:     delegate <title> <details>          (details must name Allowed Files + Verify Command)
   delegate)
     shift || true
+    worker="tukang"
+    if [[ "${1:-}" == --to ]]; then
+      worker="$(role_of "${2:-}")" || die "unknown worker role '${2:-}'. Use ui|coder|sec|tukang"
+      shift 2 || true
+    fi
     if [[ "${1:-}" == --spec ]]; then
       spec="${2:-}"; shift 2 || true
       id="$(task_new "$spec")"
+      if [[ "$worker" != "tukang" ]]; then
+        lib set "$(task_dir "$id")/task.json" target_worker "$worker"
+      fi
       task_assign "$id" "$@"
       exit 0
     fi
@@ -569,13 +582,13 @@ case "$command" in
     details="$*"
     details="${details//\\n/$'\n'}"
     if [[ -z "$title" ]]; then
-      echo "Usage: orca-bridge delegate --spec <spec.json|-> | delegate [--force] <task_title> <instructions>" >&2
+      echo "Usage: orca-bridge delegate [--to <worker>] --spec <spec.json|-> | delegate [--to <worker>] [--force] <task_title> <instructions>" >&2
       exit 1
     fi
     if [[ "$force" != 1 ]] && ! { grep -qi 'allowed files' <<<"$details" && grep -qi 'verify command' <<<"$details"; }; then
       die "Anti-Handoff-Leak: instructions need 'Allowed Files:' and 'Verify Command:' (or use --spec / --force)"
     fi
-    formatted="[TASK DARI MANDOR]
+    formatted="[TASK DARI MANDOR${worker:+ | ${worker^^}}]
 📌 Title: $title
 📋 Detail & Instruksi:
 $details
@@ -584,9 +597,9 @@ $details
 - Sentuh HANYA Allowed Files; jangan scan repo.
 - Verifikasi pakai Verify Command dari Mandor di atas (bukan default npm test).
 - Selesai: orca-bridge report DONE \"<ringkas>\" | butuh file lain: orca-bridge report BLOCKED \"<file>: <alasan>\""
-    target_handle agy
-    log "Delegating task '$title' to Tukang ($HANDLE via $HANDLE_SRC)..."
-    deliver tukang "$HANDLE" "$formatted"
+    target_handle "$worker"
+    log "Delegating task '$title' to $worker ($HANDLE via $HANDLE_SRC)..."
+    deliver "$worker" "$HANDLE" "$formatted"
     log "Task delegated."
     ;;
 
@@ -724,7 +737,7 @@ $details
     sub="${2:-show}"
     case "$sub" in
       bind)
-        role="$(role_of "${3:-}")" || die "usage: orca-bridge pair bind <mandor|tukang> <handle>"
+        role="$(role_of "${3:-}")" || die "usage: orca-bridge pair bind <mandor|tukang|ui|coder|sec> <handle>"
         h="${4:-}"
         [[ "$h" == term_* ]] || die "handle must look like term_..."
         node -e 'const d=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"));process.exit((d.result?.terminals||[]).some(t=>t.handle===process.argv[2])?0:1)' "$(terms_file)" "$h" \
@@ -847,9 +860,12 @@ $details
 
   # 11. STATUS OVERVIEW
   status)
-    m="not found"; a="not found"
+    m="not found"; a="not found"; u="not found"; c="not found"; s="not found"
     if resolve_handle mandor 0 2>/dev/null; then m="$HANDLE ($HANDLE_SRC)"; fi
     if resolve_handle tukang 0 2>/dev/null; then a="$HANDLE ($HANDLE_SRC)"; fi
+    if resolve_handle tukang-ui 0 2>/dev/null; then u="$HANDLE ($HANDLE_SRC)"; fi
+    if resolve_handle tukang-coder 0 2>/dev/null; then c="$HANDLE ($HANDLE_SRC)"; fi
+    if resolve_handle tukang-sec 0 2>/dev/null; then s="$HANDLE ($HANDLE_SRC)"; fi
     active="-"
     if in_git; then active="$(lib list "$(tasks_dir)" active | cut -f1,2 | tr '\t\n' ': ' || true)"; fi
     echo "=========================================================="
@@ -857,15 +873,21 @@ $details
     echo "=========================================================="
     echo " [PANE 1] Mandor (OMP / Claude) : $m"
     echo " [PANE 2] Tukang (Antigravity)  : $a"
+    if [[ "$u" != "not found" || "$c" != "not found" || "$s" != "not found" ]]; then
+      echo " [SQUAD WORKERS]"
+      [[ "$u" != "not found" ]] && echo "  • Tukang UI/UX    : $u"
+      [[ "$c" != "not found" ]] && echo "  • Tukang Coder    : $c"
+      [[ "$s" != "not found" ]] && echo "  • Tukang Security : $s"
+    fi
     echo " [WORKTREE] $(repo_root)"
     echo " [ACTIVE TASKS] ${active:--}"
     echo "----------------------------------------------------------"
     echo " Perintah Cepat:"
-    echo " • orca-bridge delegate --spec task.json        (Mandor -> Tukang, terstruktur)"
+    echo " • orca-bridge delegate [--to <ui|coder|sec>] --spec task.json"
     echo " • orca-bridge report DONE --task <id> <text>   (Tukang -> Mandor, auto verify)"
     echo " • orca-bridge task approve|reject <id>         (gate Mandor)"
     echo " • orca-bridge usage report                     (token tracker)"
-    echo " • orca-bridge pair bind <mandor|tukang> <handle>"
+    echo " • orca-bridge pair bind <mandor|tukang|ui|coder|sec> <handle>"
     echo " • orca-bridge browser <snapshot|screenshot|errors|network>"
     echo "=========================================================="
     ;;
