@@ -100,6 +100,8 @@ t_routing_squad_workers() {
   local id; id="$(mandor task new "$(spec '{"target_worker":"sec"}')")"
   yes "assign to sec worker" mandor task assign "$id"
   has "Security worker got task" "$id" "$(sent_to term_sec)"
+  has "sec handoff points at its role rules" "mandortukangv2/rules/tukang-sec.md" "$(sent_to term_sec)"
+  hasnt "sec handoff does not load ui rules" "tukang-ui.md" "$(sent_to term_sec)"
 }
 t_wait_and_send_failures() {
   export FAKE_ORCA_WAIT_RC=1

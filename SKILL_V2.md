@@ -35,6 +35,17 @@ Kebocoran token terbesar terjadi saat handoff prompt multibahasa yang bertele-te
 
 ---
 
+## 📜 Constitution Rules (dimuat otomatis)
+
+| Pembaca | File di `rules/` | Cara dimuat |
+| :--- | :--- | :--- |
+| Mandor | `common.md`, `mandor-v2.md` | blok `mandortukangv2` di `AGENTS.md` project |
+| `ui` / `coder` / `sec` | `common.md` + `tukang-<role>.md` | baris `ROLE` di handoff bridge saat spec punya `target_worker` |
+
+`common.md` = GLOBAL rules (satu sumber, tidak diduplikasi di file peran).
+
+---
+
 ## 🔒 Strict Anti-Handoff-Leak Contract
 
 1. **File Allowlist**: Mandor wajib menentukan daftar file yang boleh disentuh. Tukang **HARAM** membaca atau mengedit file di luar allowlist.

@@ -4,6 +4,9 @@
 'use strict';
 const fs = require('fs');
 const path = require('path');
+const os = require('os');
+
+const V2_RULES = path.join(os.homedir(), '.agents/skills/mandortukangv2/rules');
 
 const die = (msg, code = 1) => { process.stderr.write(msg.endsWith('\n') ? msg : msg + '\n'); process.exit(code); };
 const readJson = (f) => JSON.parse(fs.readFileSync(f, 'utf8'));
@@ -143,6 +146,10 @@ function handoff([taskFile, workdir, attempt, correction]) {
   if (workdir) lines.push(`WORKDIR ${workdir}  (edit files HERE only)`);
   if (correction) lines.push(`FIX ${correction}`);
   lines.push('SPEC ' + JSON.stringify(spec));
+  const role = t.target_worker && normRole(t.target_worker);
+  if (role && role !== 'tukang' && role !== 'mandor') {
+    lines.push(`ROLE first task this session: read and follow ${V2_RULES}/common.md and ${V2_RULES}/${role}.md`);
+  }
   lines.push('RULES edit only allowed_files; no repo-wide scan; no self-approve; bridge runs verify+diff check itself.');
   lines.push(`BLOCKED orca-bridge report BLOCKED --task ${t.task_id} "<file>: <why>"`);
   lines.push(`DONE orca-bridge report DONE --task ${t.task_id} "<${t.expected_report}>"`);

@@ -9,6 +9,7 @@
 - Dedicated skill definition `mandortukangv2` (`SKILL_V2.md`).
 - On-demand Mandor skills: `skills/principal-workflow.md` (DISCOVER sampai LEARN, routing per kelas, planning arsitektur), `skills/product-intelligence.md`, `skills/uiux-intelligence.md`. Hasil planning dipetakan langsung ke field spec yang sudah ada; kontrak bridge tidak berubah.
 - Test `t_routing_squad_workers` dan `t_skill_refs_resolve`: verifikasi binding multi-worker dan integritas referensi file.
+- Constitution worker: `rules/common.md` (GLOBAL rules), section konstitusi per peran di `rules/tukang-ui.md`, `rules/tukang-coder.md`, `rules/tukang-sec.md`, dan orkestrasi + review gate di `rules/mandor-v2.md`. Handoff dengan `target_worker` kini menyertakan baris `ROLE` yang menunjuk ke rules peran tersebut.
 
 ### Changed
 - `rules/mandor.md`, `CLAUDE.md`, `SKILL.md`: Mandor wajib memahami masalah asli dan membantah usulan user yang lemah (risiko + bukti + alternatif); routing ke skill on-demand. SIMPLE tidak memuat apa pun.
